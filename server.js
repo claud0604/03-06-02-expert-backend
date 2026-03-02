@@ -15,6 +15,7 @@ const errorHandler = require('./middleware/errorHandler');
 const authRouter = require('./routes/auth');
 const customersRouter = require('./routes/customers');
 const uploadRouter = require('./routes/upload');
+const appSettingsRouter = require('./routes/appSettings');
 
 const app = express();
 const PORT = process.env.PORT || 3062;
@@ -76,6 +77,7 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRouter);
 app.use('/api/customers', customersRouter);
 app.use('/api/upload', uploadRouter);
+app.use('/api/app-settings', appSettingsRouter);
 
 // 404 handler
 app.use((req, res) => {
