@@ -1,15 +1,15 @@
 /**
  * APL IMAGE - Expert Backend Server
  * Port: 3062
- * Shares MongoDB (01-custinfo) and S3 (apl-cust-images) with cust-info backend.
+ * Shares MongoDB (01-custinfo) with cust-info backend.
+ * Uses Google Cloud Storage for file storage.
  */
 require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
 const connectDB = require('./config/database');
-const { s3Client, S3_CONFIG } = require('./config/s3');
-const { HeadBucketCommand } = require('@aws-sdk/client-s3');
+const { bucket, GCS_CONFIG } = require('./config/gcs');
 const errorHandler = require('./middleware/errorHandler');
 
 const authRouter = require('./routes/auth');
@@ -23,16 +23,20 @@ const PORT = process.env.PORT || 3062;
 // MongoDB connection
 connectDB();
 
-// S3 connection check
-const checkS3Connection = async () => {
+// GCS connection check
+const checkGCSConnection = async () => {
     try {
-        await s3Client.send(new HeadBucketCommand({ Bucket: S3_CONFIG.bucket }));
-        console.log(`S3 connected: ${S3_CONFIG.bucket} (${process.env.AWS_REGION})`);
+        const [exists] = await bucket.exists();
+        if (exists) {
+            console.log(`GCS connected: ${GCS_CONFIG.bucket}`);
+        } else {
+            console.error(`GCS bucket not found: ${GCS_CONFIG.bucket}`);
+        }
     } catch (error) {
-        console.error('S3 connection failed:', error.message);
+        console.error('GCS connection failed:', error.message);
     }
 };
-checkS3Connection();
+checkGCSConnection();
 
 // CORS
 const allowedOrigins = (process.env.CORS_ORIGIN || '')
