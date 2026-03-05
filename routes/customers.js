@@ -6,6 +6,7 @@ const express = require('express');
 const router = express.Router();
 const Customer = require('../models/Customer');
 const authExpert = require('../middleware/authExpert');
+const { bucket } = require('../config/gcs');
 
 // All customer routes require expert authentication
 router.use(authExpert);
@@ -112,6 +113,64 @@ router.put('/:customerId', async (req, res, next) => {
         res.json({
             success: true,
             data: customer
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
+ * DELETE /api/customers/:customerId
+ * Delete customer: remove MongoDB document + GCS uploaded images
+ */
+router.delete('/:customerId', async (req, res, next) => {
+    try {
+        const { customerId } = req.params;
+
+        const customer = await Customer.findOne({ customerId });
+        if (!customer) {
+            return res.status(404).json({
+                success: false,
+                message: 'Customer not found.'
+            });
+        }
+
+        // Collect all GCS keys from the customer document
+        const gcsKeysToDelete = [];
+
+        // Expert-uploaded images (expert-uploads/{customerId}/...)
+        try {
+            const [files] = await bucket.getFiles({ prefix: `expert-uploads/${customerId}/` });
+            files.forEach(file => gcsKeysToDelete.push(file.name));
+        } catch (e) {
+            console.error('GCS list error:', e.message);
+        }
+
+        // Cust-info uploaded photos (APLCOLOR/03-06-01-cust-info/{customerId}/...)
+        try {
+            const [files] = await bucket.getFiles({ prefix: `APLCOLOR/03-06-01-cust-info/${customerId}/` });
+            files.forEach(file => gcsKeysToDelete.push(file.name));
+        } catch (e) {
+            console.error('GCS list error:', e.message);
+        }
+
+        // Delete GCS files
+        if (gcsKeysToDelete.length > 0) {
+            await Promise.allSettled(
+                gcsKeysToDelete.map(key => bucket.file(key).delete().catch(e => {
+                    console.error(`GCS delete failed: ${key}`, e.message);
+                }))
+            );
+            console.log(`Deleted ${gcsKeysToDelete.length} GCS files for customer ${customerId}`);
+        }
+
+        // Delete MongoDB document
+        await Customer.deleteOne({ customerId });
+
+        res.json({
+            success: true,
+            message: 'Customer deleted successfully.',
+            deletedFiles: gcsKeysToDelete.length
         });
     } catch (error) {
         next(error);
