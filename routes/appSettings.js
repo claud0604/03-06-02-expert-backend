@@ -7,7 +7,7 @@ router.get('/:type', async (req, res) => {
   try {
     const doc = await AppSettings.findOne({ type: req.params.type });
     if (!doc) {
-      return res.json({ success: false, data: null });
+      return res.json({ success: true, data: null });
     }
     res.json({ success: true, data: doc });
   } catch (err) {
