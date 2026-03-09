@@ -69,9 +69,37 @@ const customerSchema = new mongoose.Schema({
             accent: [{ type: String }],
             avoid: [{ type: String }]
         },
+        tones: {
+            main: [{ type: String }],
+            sub: [{ type: String }],
+            point: [{ type: String }]
+        },
+        indicators: {
+            temperature: { type: String, default: '' },
+            value: { type: String, default: '' },
+            chroma: { type: String, default: '' },
+            clarity: { type: String, default: '' }
+        },
+        faceContrastLevel: { type: String, default: '' },
+        fashionContrastLevel: { type: String, default: '' },
+        colorExamples: [{ type: String }],
         makeupMuse: {
             name: { type: String, default: '' },
-            imageUrl: { type: String, default: '' }
+            imageUrl: { type: String, default: '' },
+            comment: { type: String, default: '' }
+        },
+        makeup: {
+            shadowBlush: [{ type: String }],
+            lip: [{ type: String }]
+        },
+        productImages: {
+            shadowBlush: [{ type: String }],
+            lip: [{ type: String }]
+        },
+        colorUsage: {
+            nail: [{ type: String }],
+            hair: [{ type: String }],
+            accessory: [{ type: String }]
         },
         description: { type: String, default: '' }
     },
@@ -88,9 +116,17 @@ const customerSchema = new mongoose.Schema({
         description: { type: String, default: '' },
         typeImageUrl: { type: String, default: '' },
         eyebrow: {
+            style: { type: String, default: '' },
             afterImageUrl: { type: String, default: '' },
             comment: { type: String, default: '' }
         },
+        makeupRec: [{ type: String }],
+        glassesRec: [{ type: String }],
+        accessoryRec: [{ type: String }],
+        bangsRec: [{ type: String }],
+        backHairRec: [{ type: String }],
+        hairstyleRec: [{ type: String }],
+        // Legacy fields (kept for backward compatibility)
         glassesRecommendation: [{ type: String }],
         bangsRecommendation: [{ type: String }],
         hairstyleRecommendation: [{ type: String }],
@@ -110,7 +146,23 @@ const customerSchema = new mongoose.Schema({
         },
         bestItems: [{ type: String }],
         worstItems: [{ type: String }],
-        description: { type: String, default: '' }
+        description: { type: String, default: '' },
+        bestNecklines: [{ type: String }],
+        worstNecklines: [{ type: String }],
+        necklineComment: { type: String, default: '' },
+        bestCollars: [{ type: String }],
+        worstCollars: [{ type: String }],
+        collarComment: { type: String, default: '' },
+        bestTopss: [{ type: String }],
+        worstTopss: [{ type: String }],
+        topsComment: { type: String, default: '' },
+        skirtLengthComment: { type: String, default: '' },
+        bestSkirts: [{ type: String }],
+        worstSkirts: [{ type: String }],
+        skirtComment: { type: String, default: '' },
+        bestPantss: [{ type: String }],
+        worstPantss: [{ type: String }],
+        pantsComment: { type: String, default: '' }
     },
 
     styling: {
@@ -120,7 +172,10 @@ const customerSchema = new mongoose.Schema({
             bottoms: [{ type: String }],
             outerwear: [{ type: String }],
             accessories: [{ type: String }],
-            overall: [{ type: String }]
+            overall: [{ type: String }],
+            dress: [{ type: String }],
+            bags: [{ type: String }],
+            shoes: [{ type: String }]
         },
         avoidItems: [{ type: String }],
         description: { type: String, default: '' }
