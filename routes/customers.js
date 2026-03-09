@@ -135,20 +135,11 @@ router.delete('/:customerId', async (req, res, next) => {
             });
         }
 
-        // Collect all GCS keys from the customer document
+        // Collect all GCS files under this customer's folder
         const gcsKeysToDelete = [];
 
-        // Expert-uploaded images (expert-uploads/{customerId}/...)
         try {
-            const [files] = await bucket.getFiles({ prefix: `expert-uploads/${customerId}/` });
-            files.forEach(file => gcsKeysToDelete.push(file.name));
-        } catch (e) {
-            console.error('GCS list error:', e.message);
-        }
-
-        // Cust-info uploaded photos (APLCOLOR/03-06-01-cust-info/{customerId}/...)
-        try {
-            const [files] = await bucket.getFiles({ prefix: `APLCOLOR/03-06-01-cust-info/${customerId}/` });
+            const [files] = await bucket.getFiles({ prefix: `${customerId}/` });
             files.forEach(file => gcsKeysToDelete.push(file.name));
         } catch (e) {
             console.error('GCS list error:', e.message);

@@ -6,19 +6,16 @@ const router = express.Router();
 const { bucket, GCS_CONFIG } = require('../config/gcs');
 const authExpert = require('../middleware/authExpert');
 
-// GCS base path for expert uploads
-const GCS_BASE_PATH = 'expert-uploads';
-
 /**
  * POST /api/upload/view-urls
  * Generate signed URLs for viewing GCS objects (public — no auth)
- * Used to display customer photos uploaded via cust-info
+ * Accepts both gcsKeys and s3Keys for backward compatibility
  */
 router.post('/view-urls', async (req, res, next) => {
     try {
-        const { gcsKeys } = req.body;
+        const keys = req.body.gcsKeys || req.body.s3Keys;
 
-        if (!gcsKeys || !Array.isArray(gcsKeys)) {
+        if (!keys || !Array.isArray(keys)) {
             return res.status(400).json({
                 success: false,
                 message: 'gcsKeys array is required.'
@@ -26,7 +23,7 @@ router.post('/view-urls', async (req, res, next) => {
         }
 
         const viewUrls = await Promise.all(
-            gcsKeys.filter(key => key).map(async (gcsKey) => {
+            keys.filter(key => key).map(async (gcsKey) => {
                 const file = bucket.file(gcsKey);
                 const [presignedUrl] = await file.getSignedUrl({
                     version: 'v4',
@@ -72,7 +69,7 @@ router.post('/presigned-url', authExpert, async (req, res, next) => {
 
                 const timestamp = Date.now();
                 const ext = contentType.split('/')[1] || 'jpg';
-                const gcsKey = `${GCS_BASE_PATH}/${customerId}/${category}/${type}_${timestamp}.${ext}`;
+                const gcsKey = `${customerId}/${category}/${type}_${timestamp}.${ext}`;
 
                 const gcsFile = bucket.file(gcsKey);
                 const [presignedUrl] = await gcsFile.getSignedUrl({
@@ -96,6 +93,61 @@ router.post('/presigned-url', authExpert, async (req, res, next) => {
             success: true,
             data: presignedUrls,
             expiresIn: GCS_CONFIG.uploadExpires
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
+ * POST /api/upload/base64-to-gcs
+ * Upload base64 images to GCS (protected)
+ * Used by expert frontend to upload pasted/dropped images
+ */
+router.post('/base64-to-gcs', authExpert, async (req, res, next) => {
+    try {
+        const { customerId, images } = req.body;
+
+        if (!customerId || !images || !Array.isArray(images)) {
+            return res.status(400).json({
+                success: false,
+                message: 'customerId and images array are required.'
+            });
+        }
+
+        const results = await Promise.all(
+            images.map(async (img) => {
+                const { path: imgPath, base64Data } = img;
+
+                // Parse base64 data URL
+                const matches = base64Data.match(/^data:([^;]+);base64,(.+)$/);
+                if (!matches) {
+                    return { path: imgPath, gcsKey: null, error: 'Invalid base64 format' };
+                }
+
+                const contentType = matches[1];
+                const buffer = Buffer.from(matches[2], 'base64');
+                const ext = contentType.split('/')[1] || 'jpg';
+
+                // Build GCS path: {customerId}/{category}/{filename}_{timestamp}.{ext}
+                const safePath = imgPath.replace(/\./g, '/');
+                const timestamp = Date.now();
+                const gcsKey = `${customerId}/${safePath}_${timestamp}.${ext}`;
+
+                // Upload to GCS
+                const file = bucket.file(gcsKey);
+                await file.save(buffer, {
+                    contentType,
+                    metadata: { cacheControl: 'public, max-age=31536000' }
+                });
+
+                return { path: imgPath, gcsKey };
+            })
+        );
+
+        res.json({
+            success: true,
+            results
         });
     } catch (error) {
         next(error);
