@@ -50,6 +50,7 @@ app.use(cors({
         if (allowedOrigins.length && allowedOrigins.includes(origin)) return callback(null, true);
         if (origin.includes('localhost')) return callback(null, true);
         if (origin.endsWith('.pages.dev')) return callback(null, true);
+        if (origin.endsWith('.apls.kr')) return callback(null, true);
         callback(new Error('Blocked by CORS policy.'));
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
