@@ -2,6 +2,15 @@
  * Face Landmarks Service
  * MediaPipe FaceMesh via TensorFlow.js — eyebrow landmark detection + mask generation
  */
+
+// Polyfill browser globals for @mediapipe/face_mesh (loaded by face-landmarks-detection)
+if (typeof navigator === 'undefined') {
+    global.navigator = { userAgent: 'node' };
+}
+if (typeof document === 'undefined') {
+    global.document = { createElement: () => ({ getContext: () => null }) };
+}
+
 const tf = require('@tensorflow/tfjs-node');
 const faceLandmarksDetection = require('@tensorflow-models/face-landmarks-detection');
 const sharp = require('sharp');

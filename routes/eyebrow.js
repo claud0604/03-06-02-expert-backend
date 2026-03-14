@@ -6,8 +6,18 @@ const express = require('express');
 const router = express.Router();
 const { bucket, GCS_CONFIG } = require('../config/gcs');
 const authExpert = require('../middleware/authExpert');
-const { detectEyebrowsAndCreateMask } = require('../services/faceLandmarks');
-const { inpaintEyebrows } = require('../services/imagenInpainting');
+
+// Lazy-loaded to avoid crashing server on startup (TF.js heavy init)
+let _faceLandmarks = null;
+let _imagenInpainting = null;
+function getFaceLandmarks() {
+    if (!_faceLandmarks) _faceLandmarks = require('../services/faceLandmarks');
+    return _faceLandmarks;
+}
+function getImagenInpainting() {
+    if (!_imagenInpainting) _imagenInpainting = require('../services/imagenInpainting');
+    return _imagenInpainting;
+}
 
 // Eyebrow style → prompt mapping
 const STYLE_PROMPTS = {
@@ -68,12 +78,12 @@ router.post('/generate', authExpert, async (req, res, next) => {
 
         // 3. Detect eyebrow landmarks and create mask
         console.log('[Eyebrow] Detecting face landmarks...');
-        const maskBuffer = await detectEyebrowsAndCreateMask(imageBuffer);
+        const maskBuffer = await getFaceLandmarks().detectEyebrowsAndCreateMask(imageBuffer);
         console.log(`[Eyebrow] Mask created (${(maskBuffer.length / 1024).toFixed(1)}KB)`);
 
         // 4. Inpaint eyebrows with Imagen 3
         console.log(`[Eyebrow] Calling Imagen 3 inpainting (style: ${eyebrowStyle})...`);
-        const resultBuffer = await inpaintEyebrows(imageBuffer, maskBuffer, prompt);
+        const resultBuffer = await getImagenInpainting().inpaintEyebrows(imageBuffer, maskBuffer, prompt);
         console.log(`[Eyebrow] Inpainting complete (${(resultBuffer.length / 1024).toFixed(1)}KB)`);
 
         // 5. Upload result to GCS
