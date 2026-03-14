@@ -3,6 +3,7 @@
  * Vertex AI REST API — mask-based eyebrow inpainting + original compositing
  */
 const { GoogleAuth } = require('google-auth-library');
+const { Storage } = require('@google-cloud/storage');
 const sharp = require('sharp');
 const path = require('path');
 
@@ -11,14 +12,15 @@ const LOCATION = 'us-central1';
 const MODEL = 'imagen-3.0-capability-001';
 const ENDPOINT = `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${MODEL}:predict`;
 
-let authClient = null;
+// Style reference images in GCS bucket 02-expert
+const STYLE_REF_BUCKET = '02-expert';
+const STYLE_REF_PREFIX = '00-basic-setting/';
 
-/**
- * Get authenticated client using existing GCS service account
- */
+let authClient = null;
+const styleRefCache = {};
+
 async function getAuthClient() {
     if (authClient) return authClient;
-
     const keyFile = path.resolve(process.env.GCS_KEY_FILE || './config/gcs-key.json');
     const auth = new GoogleAuth({
         keyFile,
@@ -30,38 +32,74 @@ async function getAuthClient() {
 }
 
 /**
- * Call Imagen 3 inpainting API
+ * Download and cache style reference image from GCS
+ * @param {string} styleName - e.g. 'round', 'arch', 'straight'
+ * @returns {Buffer} image buffer
+ */
+async function getStyleRefImage(styleName) {
+    if (styleRefCache[styleName]) return styleRefCache[styleName];
+
+    const storage = new Storage({
+        projectId: PROJECT_ID,
+        keyFilename: path.resolve(process.env.GCS_KEY_FILE || './config/gcs-key.json')
+    });
+
+    const file = storage.bucket(STYLE_REF_BUCKET).file(`${STYLE_REF_PREFIX}${styleName}.png`);
+    const [buffer] = await file.download();
+    styleRefCache[styleName] = buffer;
+    console.log(`[Imagen] Cached style ref: ${styleName} (${(buffer.length / 1024).toFixed(1)}KB)`);
+    return buffer;
+}
+
+/**
+ * Call Imagen 3 inpainting API with style reference
  * @param {Buffer} imageBuffer - original image (JPEG/PNG)
  * @param {Buffer} maskBuffer - mask PNG (white=inpaint, black=keep)
  * @param {string} prompt - text prompt describing desired eyebrows
+ * @param {string} styleName - style code for reference image
  * @returns {Buffer} generated image buffer
  */
-async function callImagenInpainting(imageBuffer, maskBuffer, prompt) {
+async function callImagenInpainting(imageBuffer, maskBuffer, prompt, styleName) {
     const client = await getAuthClient();
 
-    // Convert buffers to base64
     const imageBase64 = imageBuffer.toString('base64');
     const maskBase64 = maskBuffer.toString('base64');
+
+    const referenceImages = [
+        {
+            referenceType: 'REFERENCE_TYPE_RAW',
+            referenceId: 1,
+            referenceImage: { bytesBase64Encoded: imageBase64 }
+        },
+        {
+            referenceType: 'REFERENCE_TYPE_MASK',
+            referenceId: 2,
+            referenceImage: { bytesBase64Encoded: maskBase64 },
+            maskImageConfig: {
+                maskMode: 'MASK_MODE_USER_PROVIDED'
+            }
+        }
+    ];
+
+    // Add style reference image if available
+    try {
+        const styleBuffer = await getStyleRefImage(styleName);
+        const styleBase64 = styleBuffer.toString('base64');
+        referenceImages.push({
+            referenceType: 'REFERENCE_TYPE_STYLE',
+            referenceId: 3,
+            referenceImage: { bytesBase64Encoded: styleBase64 }
+        });
+        console.log(`[Imagen] Style reference added: ${styleName}`);
+    } catch (err) {
+        console.warn(`[Imagen] Style reference not found for "${styleName}", using prompt only`);
+    }
 
     const requestBody = {
         instances: [
             {
                 prompt: prompt,
-                referenceImages: [
-                    {
-                        referenceType: 'REFERENCE_TYPE_RAW',
-                        referenceId: 1,
-                        referenceImage: { bytesBase64Encoded: imageBase64 }
-                    },
-                    {
-                        referenceType: 'REFERENCE_TYPE_MASK',
-                        referenceId: 2,
-                        referenceImage: { bytesBase64Encoded: maskBase64 },
-                        maskImageConfig: {
-                            maskMode: 'MASK_MODE_USER_PROVIDED'
-                        }
-                    }
-                ]
+                referenceImages: referenceImages
             }
         ],
         parameters: {
@@ -94,17 +132,11 @@ async function callImagenInpainting(imageBuffer, maskBuffer, prompt) {
 /**
  * Composite: paste inpainted eyebrow region onto original image
  * Ensures pixels outside mask are 100% original
- * @param {Buffer} originalBuffer - original image
- * @param {Buffer} generatedBuffer - Imagen output
- * @param {Buffer} maskBuffer - mask (white=use generated, black=use original)
- * @returns {Buffer} final composited JPEG buffer
  */
 async function compositeWithOriginal(originalBuffer, generatedBuffer, maskBuffer) {
-    // Get original dimensions
     const originalMeta = await sharp(originalBuffer).metadata();
     const { width, height } = originalMeta;
 
-    // Resize generated and mask to match original (safety)
     const resizedGenerated = await sharp(generatedBuffer)
         .resize(width, height, { fit: 'fill' })
         .raw()
@@ -121,13 +153,12 @@ async function compositeWithOriginal(originalBuffer, generatedBuffer, maskBuffer
         .raw()
         .toBuffer();
 
-    // Per-pixel blending: output = original * (1 - maskAlpha) + generated * maskAlpha
     const channels = 3;
     const pixelCount = width * height;
     const output = Buffer.alloc(pixelCount * channels);
 
     for (let i = 0; i < pixelCount; i++) {
-        const alpha = resizedMask[i] / 255; // mask is grayscale, single channel
+        const alpha = resizedMask[i] / 255;
         const idx = i * channels;
         for (let c = 0; c < channels; c++) {
             output[idx + c] = Math.round(
@@ -136,7 +167,6 @@ async function compositeWithOriginal(originalBuffer, generatedBuffer, maskBuffer
         }
     }
 
-    // Convert raw pixels back to JPEG
     const result = await sharp(output, {
         raw: { width, height, channels }
     })
@@ -151,23 +181,20 @@ async function compositeWithOriginal(originalBuffer, generatedBuffer, maskBuffer
  * @param {Buffer} imageBuffer - original face image
  * @param {Buffer} maskBuffer - eyebrow mask
  * @param {string} prompt - eyebrow style prompt
+ * @param {string} styleName - style code (round, arch, etc.)
  * @returns {Buffer} final image JPEG buffer
  */
-async function inpaintEyebrows(imageBuffer, maskBuffer, prompt) {
-    // Ensure image is JPEG for Imagen API
+async function inpaintEyebrows(imageBuffer, maskBuffer, prompt, styleName) {
     const jpegBuffer = await sharp(imageBuffer)
         .jpeg({ quality: 95 })
         .toBuffer();
 
-    // Ensure mask is PNG
     const pngMask = await sharp(maskBuffer)
         .png()
         .toBuffer();
 
-    // Call Imagen 3 inpainting
-    const generatedBuffer = await callImagenInpainting(jpegBuffer, pngMask, prompt);
+    const generatedBuffer = await callImagenInpainting(jpegBuffer, pngMask, prompt, styleName);
 
-    // Composite: keep original everywhere except eyebrow mask region
     const finalBuffer = await compositeWithOriginal(jpegBuffer, generatedBuffer, pngMask);
 
     return finalBuffer;

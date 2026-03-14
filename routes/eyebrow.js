@@ -83,7 +83,7 @@ router.post('/generate', authExpert, async (req, res, next) => {
 
         // 4. Inpaint eyebrows with Imagen 3
         console.log(`[Eyebrow] Calling Imagen 3 inpainting (style: ${eyebrowStyle})...`);
-        const resultBuffer = await getImagenInpainting().inpaintEyebrows(imageBuffer, maskBuffer, prompt);
+        const resultBuffer = await getImagenInpainting().inpaintEyebrows(imageBuffer, maskBuffer, prompt, eyebrowStyle);
         console.log(`[Eyebrow] Inpainting complete (${(resultBuffer.length / 1024).toFixed(1)}KB)`);
 
         // 5. Upload result + mask to GCS
