@@ -51,14 +51,14 @@ async function callImagenInpainting(imageBuffer, maskBuffer, prompt) {
                     {
                         referenceType: 'REFERENCE_TYPE_RAW',
                         referenceId: 1,
-                        image: { bytesBase64Encoded: imageBase64 }
+                        referenceImage: { bytesBase64Encoded: imageBase64 }
                     },
                     {
                         referenceType: 'REFERENCE_TYPE_MASK',
                         referenceId: 2,
-                        image: { bytesBase64Encoded: maskBase64 },
+                        referenceImage: { bytesBase64Encoded: maskBase64 },
                         maskImageConfig: {
-                            maskType: 'MASK_TYPE_USER_PROVIDED'
+                            maskMode: 'MASK_MODE_USER_PROVIDED'
                         }
                     }
                 ]
