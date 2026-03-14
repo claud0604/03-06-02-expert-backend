@@ -1,131 +1,147 @@
 /**
  * Face Landmarks Service
- * MediaPipe FaceMesh via TensorFlow.js — eyebrow landmark detection + mask generation
+ * Google Cloud Vision API — eyebrow landmark detection + mask generation
  */
-
-// Polyfill browser globals for @mediapipe/face_mesh (loaded by face-landmarks-detection)
-if (typeof navigator === 'undefined') {
-    global.navigator = { userAgent: 'node' };
-}
-if (typeof document === 'undefined') {
-    global.document = { createElement: () => ({ getContext: () => null }) };
-}
-
-const tf = require('@tensorflow/tfjs-node');
-const faceLandmarksDetection = require('@tensorflow-models/face-landmarks-detection');
+const { GoogleAuth } = require('google-auth-library');
 const sharp = require('sharp');
+const path = require('path');
 
-let detector = null;
+const VISION_API_URL = 'https://vision.googleapis.com/v1/images:annotate';
+const MASK_DILATE_PX = 18;
+const MASK_BLUR_SIGMA = 8;
 
-// Eyebrow landmark indices (MediaPipe FaceMesh 468 keypoints)
-const RIGHT_EYEBROW_TOP = [70, 63, 105, 66, 107];
-const RIGHT_EYEBROW_BOTTOM = [46, 53, 52, 65, 55];
-const LEFT_EYEBROW_TOP = [300, 293, 334, 296, 336];
-const LEFT_EYEBROW_BOTTOM = [276, 283, 282, 295, 285];
+let authClient = null;
 
-const MASK_DILATE_PX = 14;
-const MASK_BLUR_SIGMA = 7;
-
-/**
- * Initialize FaceMesh detector (singleton)
- */
-async function getDetector() {
-    if (detector) return detector;
-
-    const model = faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh;
-    detector = await faceLandmarksDetection.createDetector(model, {
-        runtime: 'tfjs',
-        refineLandmarks: true,
-        maxFaces: 1
+async function getAuthClient() {
+    if (authClient) return authClient;
+    const keyFile = path.resolve(process.env.GCS_KEY_FILE || './config/gcs-key.json');
+    const auth = new GoogleAuth({
+        keyFile,
+        scopes: ['https://www.googleapis.com/auth/cloud-platform']
     });
-    console.log('FaceMesh detector initialized');
-    return detector;
+    authClient = await auth.getClient();
+    return authClient;
 }
 
 /**
- * Detect eyebrow landmarks from image buffer
- * @param {Buffer} imageBuffer - JPEG/PNG image
- * @returns {Object} { keypoints, width, height }
+ * Detect face landmarks using Cloud Vision API
+ * @param {Buffer} imageBuffer
+ * @returns {Object} { landmarks, width, height }
  */
-async function detectFace(imageBuffer) {
-    const det = await getDetector();
+async function detectFaceLandmarks(imageBuffer) {
+    const client = await getAuthClient();
 
-    // Decode image to tensor
-    const decoded = tf.node.decodeImage(imageBuffer, 3);
-    const [height, width] = decoded.shape;
+    const response = await client.request({
+        url: VISION_API_URL,
+        method: 'POST',
+        data: {
+            requests: [{
+                image: { content: imageBuffer.toString('base64') },
+                features: [{ type: 'FACE_DETECTION', maxResults: 1 }]
+            }]
+        }
+    });
 
-    const faces = await det.estimateFaces(decoded);
-    decoded.dispose();
-
+    const faces = response.data.responses[0].faceAnnotations;
     if (!faces || faces.length === 0) {
         throw new Error('No face detected in image');
     }
 
-    return { keypoints: faces[0].keypoints, width, height };
+    // Get image dimensions
+    const meta = await sharp(imageBuffer).metadata();
+
+    return {
+        landmarks: faces[0].landmarks,
+        boundingPoly: faces[0].fdBoundingPoly,
+        width: meta.width,
+        height: meta.height
+    };
 }
 
 /**
- * Build closed polygon points for one eyebrow with dilation
+ * Build eyebrow polygon from Vision API landmarks
+ * Vision API provides these eyebrow-related landmarks:
+ * - LEFT_OF_LEFT_EYEBROW, RIGHT_OF_LEFT_EYEBROW, LEFT_EYEBROW_UPPER_MIDPOINT
+ * - LEFT_OF_RIGHT_EYEBROW, RIGHT_OF_RIGHT_EYEBROW, RIGHT_EYEBROW_UPPER_MIDPOINT
+ * Plus eye landmarks to define the lower boundary of eyebrow region
  */
-function buildEyebrowPolygon(keypoints, topIndices, bottomIndices, dilate) {
-    const topPoints = topIndices.map(i => keypoints[i]);
-    const bottomPoints = bottomIndices.map(i => keypoints[i]);
-
-    // Compute centroid for dilation direction
-    const allPts = [...topPoints, ...bottomPoints];
-    const cx = allPts.reduce((s, p) => s + p.x, 0) / allPts.length;
-    const cy = allPts.reduce((s, p) => s + p.y, 0) / allPts.length;
-
-    function dilatePoint(px, py) {
-        const dx = px - cx;
-        const dy = py - cy;
-        const len = Math.sqrt(dx * dx + dy * dy) || 1;
-        return {
-            x: Math.round(px + (dx / len) * dilate),
-            y: Math.round(py + (dy / len) * dilate)
-        };
+function buildEyebrowMaskPolygons(landmarks, dilate) {
+    const lm = {};
+    for (const l of landmarks) {
+        lm[l.type] = { x: l.position.x, y: l.position.y };
     }
 
-    // Top points (left to right) + bottom points reversed (right to left) = closed polygon
-    const polygon = [];
-    for (const p of topPoints) {
-        const d = dilatePoint(p.x, p.y);
-        // Extra upward push for top points
-        polygon.push({ x: d.x, y: d.y - Math.round(dilate * 0.5) });
-    }
-    for (const p of [...bottomPoints].reverse()) {
-        const d = dilatePoint(p.x, p.y);
-        // Extra downward push for bottom points
-        polygon.push({ x: d.x, y: d.y + Math.round(dilate * 0.3) });
+    // Left eyebrow (viewer's left = person's right)
+    const leftOuter = lm['LEFT_OF_LEFT_EYEBROW'];
+    const leftInner = lm['RIGHT_OF_LEFT_EYEBROW'];
+    const leftUpper = lm['LEFT_EYEBROW_UPPER_MIDPOINT'];
+    const leftEyeTop = lm['LEFT_EYE_TOP_BOUNDARY'];
+
+    // Right eyebrow
+    const rightInner = lm['LEFT_OF_RIGHT_EYEBROW'];
+    const rightOuter = lm['RIGHT_OF_RIGHT_EYEBROW'];
+    const rightUpper = lm['RIGHT_EYEBROW_UPPER_MIDPOINT'];
+    const rightEyeTop = lm['RIGHT_EYE_TOP_BOUNDARY'];
+
+    if (!leftOuter || !leftInner || !leftUpper || !rightInner || !rightOuter || !rightUpper) {
+        throw new Error('Required eyebrow landmarks not found');
     }
 
-    return polygon;
+    function buildPoly(outer, inner, upper, eyeTop) {
+        // Eyebrow height estimate
+        const browHeight = eyeTop
+            ? Math.abs(upper.y - eyeTop.y) * 0.6
+            : dilate * 2;
+
+        // Top edge (above eyebrow)
+        const topY = upper.y - browHeight - dilate;
+        // Bottom edge (between eyebrow and eye)
+        const bottomY = eyeTop ? eyeTop.y - dilate * 0.3 : upper.y + browHeight * 0.5;
+
+        return [
+            { x: outer.x - dilate, y: topY },
+            { x: upper.x, y: topY - dilate * 0.3 },
+            { x: inner.x + dilate, y: topY },
+            { x: inner.x + dilate, y: bottomY },
+            { x: upper.x, y: bottomY + dilate * 0.2 },
+            { x: outer.x - dilate, y: bottomY }
+        ];
+    }
+
+    const leftPoly = buildPoly(leftOuter, leftInner, leftUpper, leftEyeTop);
+    const rightPoly = buildPoly(rightInner, rightOuter, rightUpper, rightEyeTop);
+
+    // Mirror right polygon direction (inner is on left side for right eyebrow)
+    const rightPolyFixed = [
+        { x: rightInner.x - dilate, y: rightPoly[0].y },
+        { x: rightUpper.x, y: rightPoly[1].y },
+        { x: rightOuter.x + dilate, y: rightPoly[2].y },
+        { x: rightOuter.x + dilate, y: rightPoly[3].y },
+        { x: rightUpper.x, y: rightPoly[4].y },
+        { x: rightInner.x - dilate, y: rightPoly[5].y }
+    ];
+
+    return { leftPoly, rightPoly: rightPolyFixed };
 }
 
 /**
  * Generate eyebrow mask PNG from image buffer
  * White = eyebrow region (to inpaint), Black = keep original
  * @param {Buffer} imageBuffer
- * @returns {Buffer} mask PNG buffer (same dimensions as input)
+ * @returns {Buffer} mask PNG buffer
  */
 async function detectEyebrowsAndCreateMask(imageBuffer) {
-    const { keypoints, width, height } = await detectFace(imageBuffer);
+    const { landmarks, width, height } = await detectFaceLandmarks(imageBuffer);
+    const { leftPoly, rightPoly } = buildEyebrowMaskPolygons(landmarks, MASK_DILATE_PX);
 
-    // Build polygons for both eyebrows
-    const rightPoly = buildEyebrowPolygon(keypoints, RIGHT_EYEBROW_TOP, RIGHT_EYEBROW_BOTTOM, MASK_DILATE_PX);
-    const leftPoly = buildEyebrowPolygon(keypoints, LEFT_EYEBROW_TOP, LEFT_EYEBROW_BOTTOM, MASK_DILATE_PX);
-
-    // Create SVG with white eyebrow polygons on black background
-    const polyToSvg = (poly) =>
-        poly.map(p => `${p.x},${p.y}`).join(' ');
+    const polyToSvg = (poly) => poly.map(p => `${Math.round(p.x)},${Math.round(p.y)}`).join(' ');
 
     const svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
         <rect width="100%" height="100%" fill="black"/>
-        <polygon points="${polyToSvg(rightPoly)}" fill="white"/>
         <polygon points="${polyToSvg(leftPoly)}" fill="white"/>
+        <polygon points="${polyToSvg(rightPoly)}" fill="white"/>
     </svg>`;
 
-    // Render SVG to PNG and apply Gaussian blur for soft edges
     const maskBuffer = await sharp(Buffer.from(svg))
         .png()
         .blur(MASK_BLUR_SIGMA)
