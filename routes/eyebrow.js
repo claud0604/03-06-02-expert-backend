@@ -86,23 +86,39 @@ router.post('/generate', authExpert, async (req, res, next) => {
         const resultBuffer = await getImagenInpainting().inpaintEyebrows(imageBuffer, maskBuffer, prompt);
         console.log(`[Eyebrow] Inpainting complete (${(resultBuffer.length / 1024).toFixed(1)}KB)`);
 
-        // 5. Upload result to GCS
+        // 5. Upload result + mask to GCS
         const timestamp = Date.now();
         const gcsKey = `${customerId}/face/eyebrow_${eyebrowStyle}_${timestamp}.jpg`;
+        const maskGcsKey = `${customerId}/face/eyebrow_mask_${eyebrowStyle}_${timestamp}.png`;
+
         const resultFile = bucket.file(gcsKey);
+        const maskFile = bucket.file(maskGcsKey);
 
-        await resultFile.save(resultBuffer, {
-            contentType: 'image/jpeg',
-            metadata: { cacheControl: 'public, max-age=31536000' }
-        });
-        console.log(`[Eyebrow] Uploaded result: ${gcsKey}`);
+        await Promise.all([
+            resultFile.save(resultBuffer, {
+                contentType: 'image/jpeg',
+                metadata: { cacheControl: 'public, max-age=31536000' }
+            }),
+            maskFile.save(maskBuffer, {
+                contentType: 'image/png',
+                metadata: { cacheControl: 'public, max-age=31536000' }
+            })
+        ]);
+        console.log(`[Eyebrow] Uploaded result: ${gcsKey}, mask: ${maskGcsKey}`);
 
-        // 6. Generate signed URL for viewing
-        const [viewUrl] = await resultFile.getSignedUrl({
-            version: 'v4',
-            action: 'read',
-            expires: Date.now() + GCS_CONFIG.viewExpires * 1000
-        });
+        // 6. Generate signed URLs for viewing
+        const [[viewUrl], [maskViewUrl]] = await Promise.all([
+            resultFile.getSignedUrl({
+                version: 'v4',
+                action: 'read',
+                expires: Date.now() + GCS_CONFIG.viewExpires * 1000
+            }),
+            maskFile.getSignedUrl({
+                version: 'v4',
+                action: 'read',
+                expires: Date.now() + GCS_CONFIG.viewExpires * 1000
+            })
+        ]);
 
         console.log(`[Eyebrow] Generation complete for customer=${customerId}`);
 
@@ -110,7 +126,9 @@ router.post('/generate', authExpert, async (req, res, next) => {
             success: true,
             data: {
                 viewUrl,
-                gcsKey
+                gcsKey,
+                maskViewUrl,
+                maskGcsKey
             }
         });
 
