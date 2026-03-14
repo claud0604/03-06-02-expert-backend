@@ -138,4 +138,69 @@ router.post('/generate', authExpert, async (req, res, next) => {
     }
 });
 
+/**
+ * GET /api/eyebrow/list/:customerId
+ * List previously generated eyebrow images for a customer
+ */
+router.get('/list/:customerId', authExpert, async (req, res, next) => {
+    try {
+        const { customerId } = req.params;
+        const prefix = `${customerId}/face/eyebrow_`;
+        const [files] = await bucket.getFiles({ prefix });
+
+        // Filter result images (exclude masks)
+        const resultFiles = files.filter(f => !f.name.includes('_mask_'));
+
+        if (resultFiles.length === 0) {
+            return res.json({ success: true, data: [] });
+        }
+
+        // Find matching masks and generate signed URLs
+        const items = await Promise.all(resultFiles.map(async (file) => {
+            const name = file.name;
+            // Extract style from filename: eyebrow_{style}_{timestamp}.jpg
+            const match = name.match(/eyebrow_([a-z_]+)_(\d+)\.jpg$/);
+            const style = match ? match[1] : 'unknown';
+            const timestamp = match ? parseInt(match[2]) : 0;
+
+            // Find matching mask
+            const maskName = name.replace('eyebrow_', 'eyebrow_mask_').replace('.jpg', '.png');
+            const maskFile = files.find(f => f.name === maskName);
+
+            const [viewUrl] = await file.getSignedUrl({
+                version: 'v4',
+                action: 'read',
+                expires: Date.now() + GCS_CONFIG.viewExpires * 1000
+            });
+
+            const result = {
+                gcsKey: name,
+                viewUrl,
+                style,
+                timestamp
+            };
+
+            if (maskFile) {
+                const [maskViewUrl] = await maskFile.getSignedUrl({
+                    version: 'v4',
+                    action: 'read',
+                    expires: Date.now() + GCS_CONFIG.viewExpires * 1000
+                });
+                result.maskViewUrl = maskViewUrl;
+                result.maskGcsKey = maskFile.name;
+            }
+
+            return result;
+        }));
+
+        // Sort by newest first
+        items.sort((a, b) => b.timestamp - a.timestamp);
+
+        res.json({ success: true, data: items });
+    } catch (error) {
+        console.error('[Eyebrow] List error:', error.message);
+        next(error);
+    }
+});
+
 module.exports = router;
