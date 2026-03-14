@@ -3,7 +3,6 @@
  * Vertex AI REST API — mask-based eyebrow inpainting + original compositing
  */
 const { GoogleAuth } = require('google-auth-library');
-const { Storage } = require('@google-cloud/storage');
 const sharp = require('sharp');
 const path = require('path');
 
@@ -12,12 +11,7 @@ const LOCATION = 'us-central1';
 const MODEL = 'imagen-3.0-capability-001';
 const ENDPOINT = `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${MODEL}:predict`;
 
-// Style reference images in GCS bucket 02-expert
-const STYLE_REF_BUCKET = '02-expert';
-const STYLE_REF_PREFIX = '00-basic-setting/';
-
 let authClient = null;
-const styleRefCache = {};
 
 async function getAuthClient() {
     if (authClient) return authClient;
@@ -32,74 +26,37 @@ async function getAuthClient() {
 }
 
 /**
- * Download and cache style reference image from GCS
- * @param {string} styleName - e.g. 'round', 'arch', 'straight'
- * @returns {Buffer} image buffer
- */
-async function getStyleRefImage(styleName) {
-    if (styleRefCache[styleName]) return styleRefCache[styleName];
-
-    const storage = new Storage({
-        projectId: PROJECT_ID,
-        keyFilename: path.resolve(process.env.GCS_KEY_FILE || './config/gcs-key.json')
-    });
-
-    const file = storage.bucket(STYLE_REF_BUCKET).file(`${STYLE_REF_PREFIX}${styleName}.png`);
-    const [buffer] = await file.download();
-    styleRefCache[styleName] = buffer;
-    console.log(`[Imagen] Cached style ref: ${styleName} (${(buffer.length / 1024).toFixed(1)}KB)`);
-    return buffer;
-}
-
-/**
- * Call Imagen 3 inpainting API with style reference
+ * Call Imagen 3 inpainting API
  * @param {Buffer} imageBuffer - original image (JPEG/PNG)
  * @param {Buffer} maskBuffer - mask PNG (white=inpaint, black=keep)
  * @param {string} prompt - text prompt describing desired eyebrows
- * @param {string} styleName - style code for reference image
  * @returns {Buffer} generated image buffer
  */
-async function callImagenInpainting(imageBuffer, maskBuffer, prompt, styleName) {
+async function callImagenInpainting(imageBuffer, maskBuffer, prompt) {
     const client = await getAuthClient();
 
     const imageBase64 = imageBuffer.toString('base64');
     const maskBase64 = maskBuffer.toString('base64');
 
-    const referenceImages = [
-        {
-            referenceType: 'REFERENCE_TYPE_RAW',
-            referenceId: 1,
-            referenceImage: { bytesBase64Encoded: imageBase64 }
-        },
-        {
-            referenceType: 'REFERENCE_TYPE_MASK',
-            referenceId: 2,
-            referenceImage: { bytesBase64Encoded: maskBase64 },
-            maskImageConfig: {
-                maskMode: 'MASK_MODE_USER_PROVIDED'
-            }
-        }
-    ];
-
-    // Add style reference image if available
-    try {
-        const styleBuffer = await getStyleRefImage(styleName);
-        const styleBase64 = styleBuffer.toString('base64');
-        referenceImages.push({
-            referenceType: 'REFERENCE_TYPE_STYLE',
-            referenceId: 3,
-            referenceImage: { bytesBase64Encoded: styleBase64 }
-        });
-        console.log(`[Imagen] Style reference added: ${styleName}`);
-    } catch (err) {
-        console.warn(`[Imagen] Style reference not found for "${styleName}", using prompt only`);
-    }
-
     const requestBody = {
         instances: [
             {
                 prompt: prompt,
-                referenceImages: referenceImages
+                referenceImages: [
+                    {
+                        referenceType: 'REFERENCE_TYPE_RAW',
+                        referenceId: 1,
+                        referenceImage: { bytesBase64Encoded: imageBase64 }
+                    },
+                    {
+                        referenceType: 'REFERENCE_TYPE_MASK',
+                        referenceId: 2,
+                        referenceImage: { bytesBase64Encoded: maskBase64 },
+                        maskImageConfig: {
+                            maskMode: 'MASK_MODE_USER_PROVIDED'
+                        }
+                    }
+                ]
             }
         ],
         parameters: {
@@ -181,10 +138,9 @@ async function compositeWithOriginal(originalBuffer, generatedBuffer, maskBuffer
  * @param {Buffer} imageBuffer - original face image
  * @param {Buffer} maskBuffer - eyebrow mask
  * @param {string} prompt - eyebrow style prompt
- * @param {string} styleName - style code (round, arch, etc.)
  * @returns {Buffer} final image JPEG buffer
  */
-async function inpaintEyebrows(imageBuffer, maskBuffer, prompt, styleName) {
+async function inpaintEyebrows(imageBuffer, maskBuffer, prompt) {
     const jpegBuffer = await sharp(imageBuffer)
         .jpeg({ quality: 95 })
         .toBuffer();
@@ -193,7 +149,7 @@ async function inpaintEyebrows(imageBuffer, maskBuffer, prompt, styleName) {
         .png()
         .toBuffer();
 
-    const generatedBuffer = await callImagenInpainting(jpegBuffer, pngMask, prompt, styleName);
+    const generatedBuffer = await callImagenInpainting(jpegBuffer, pngMask, prompt);
 
     const finalBuffer = await compositeWithOriginal(jpegBuffer, generatedBuffer, pngMask);
 

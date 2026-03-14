@@ -19,13 +19,13 @@ function getImagenInpainting() {
     return _imagenInpainting;
 }
 
-// Eyebrow style → prompt mapping
+// Eyebrow style → detailed prompt mapping
 const STYLE_PROMPTS = {
-    round: 'Natural round shaped eyebrows, soft curved arch, well-groomed, realistic skin texture, natural hair strands',
-    ascending: 'Ascending upward angled eyebrows, sharp upward slope from inner to outer corner, well-defined, realistic skin texture',
-    semi_arch: 'Semi-arch shaped eyebrows, gentle natural arch, balanced thickness, realistic skin texture, natural hair strands',
-    arch: 'High arch shaped eyebrows, dramatic curved arch peak, elegant shape, realistic skin texture, natural hair strands',
-    straight: 'Straight horizontal eyebrows, flat natural shape, even thickness, Korean style, realistic skin texture, natural hair strands'
+    round: 'Perfectly groomed round-shaped eyebrows with a soft gentle curved arch. Medium thickness with natural-looking hair strokes. The eyebrow follows a smooth continuous curve from the inner corner to the outer corner. Clean well-defined edges that blend naturally into surrounding skin. Photorealistic high-resolution quality, matching the person\'s natural hair color.',
+    ascending: 'Sharp ascending eyebrows angled upward from the inner corner to the outer corner. The tail is noticeably higher than the head of the eyebrow, creating an upward diagonal line. Clean defined edges with natural hair texture and medium-thick strokes. Well-groomed appearance. Photorealistic quality matching the person\'s natural hair color.',
+    semi_arch: 'Semi-arched eyebrows with a gentle natural arch. The highest point is slightly past the middle of the eyebrow. Balanced even thickness throughout from head to tail. Natural hair strands visible with soft edges blending into skin. Elegant but not dramatic curve. Photorealistic quality matching the person\'s natural hair color.',
+    arch: 'Dramatic high-arched eyebrows with a clearly defined peak at the highest point. Well-sculpted shape with an elegant curve that lifts at the arch and tapers toward the tail. Clean groomed appearance with visible hair texture. The arch creates a lifted sophisticated look. Photorealistic quality matching the person\'s natural hair color.',
+    straight: 'Perfectly straight horizontal eyebrows in Korean beauty style. Flat even shape from inner corner to outer corner with consistent thickness throughout. No arch or curve, completely horizontal line. Natural hair texture with soft edges and clean groomed appearance. Photorealistic quality matching the person\'s natural hair color.'
 };
 
 /**
@@ -83,7 +83,7 @@ router.post('/generate', authExpert, async (req, res, next) => {
 
         // 4. Inpaint eyebrows with Imagen 3
         console.log(`[Eyebrow] Calling Imagen 3 inpainting (style: ${eyebrowStyle})...`);
-        const resultBuffer = await getImagenInpainting().inpaintEyebrows(imageBuffer, maskBuffer, prompt, eyebrowStyle);
+        const resultBuffer = await getImagenInpainting().inpaintEyebrows(imageBuffer, maskBuffer, prompt);
         console.log(`[Eyebrow] Inpainting complete (${(resultBuffer.length / 1024).toFixed(1)}KB)`);
 
         // 5. Upload result + mask to GCS
