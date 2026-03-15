@@ -1,30 +1,13 @@
 /**
  * Gemini Image Editing Service (Nano Banana)
- * Vertex AI — prompt-based eyebrow editing using Gemini 2.5 Flash Image
+ * Google AI API — prompt-based eyebrow editing using Gemini 2.5 Flash Image
  * No mask support — relies on Gemini's understanding to edit only eyebrows
  */
-const { GoogleAuth } = require('google-auth-library');
 const sharp = require('sharp');
-const path = require('path');
 
-const PROJECT_ID = process.env.GCS_PROJECT_ID;
-const LOCATION = 'us-central1';
-const MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-2.0-flash-exp';
-const ENDPOINT = `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${MODEL}:generateContent`;
-
-let authClient = null;
-
-async function getAuthClient() {
-    if (authClient) return authClient;
-    const keyFile = path.resolve(process.env.GCS_KEY_FILE || './config/gcs-key.json');
-    const auth = new GoogleAuth({
-        keyFile,
-        scopes: ['https://www.googleapis.com/auth/cloud-platform']
-    });
-    authClient = await auth.getClient();
-    console.log('Gemini Image auth client initialized');
-    return authClient;
-}
+const API_KEY = process.env.GEMINI_API_KEY;
+const MODEL = 'gemini-2.5-flash-image';
+const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${API_KEY}`;
 
 /**
  * Edit eyebrows using Gemini's native image editing
@@ -34,7 +17,9 @@ async function getAuthClient() {
  * @returns {Buffer[]} array of generated JPEG buffers
  */
 async function editEyebrows(imageBuffer, prompt) {
-    const client = await getAuthClient();
+    if (!API_KEY) {
+        throw new Error('GEMINI_API_KEY is not set in environment variables');
+    }
 
     const jpegBuffer = await sharp(imageBuffer)
         .jpeg({ quality: 95 })
@@ -77,15 +62,22 @@ CRITICAL RULES:
         }
     };
 
-    const response = await client.request({
-        url: ENDPOINT,
+    console.log('[Gemini] Calling Gemini 2.5 Flash Image API...');
+
+    const response = await fetch(ENDPOINT, {
         method: 'POST',
-        data: requestBody,
         headers: { 'Content-Type': 'application/json' },
-        timeout: 120000
+        body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(120000)
     });
 
-    const candidates = response.data.candidates;
+    if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Gemini API error ${response.status}: ${errText}`);
+    }
+
+    const data = await response.json();
+    const candidates = data.candidates;
     if (!candidates || candidates.length === 0) {
         throw new Error('Gemini returned no candidates');
     }
@@ -109,6 +101,7 @@ CRITICAL RULES:
         throw new Error('Gemini returned no image data');
     }
 
+    console.log(`[Gemini] Got ${results.length} image(s)`);
     return results;
 }
 
