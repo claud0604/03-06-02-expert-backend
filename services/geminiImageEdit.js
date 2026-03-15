@@ -74,6 +74,13 @@ GOLDEN RATIO PLACEMENT (critical — adapt the reference shape to THIS face):
 - FOR MALE FACES: Eyebrows sit lower and closer to the eyes, straighter with less arch, and thicker overall.
 - FOR FEMALE FACES: Eyebrows sit slightly higher above the brow bone, with a more defined arch, and more refined/thinner shape.
 
+OUTPUT FORMAT:
+- Output EXACTLY ONE image — the edited version of the first image.
+- The output must have the SAME dimensions (width × height) as the first input image.
+- Do NOT create a side-by-side comparison, collage, split image, or before/after layout.
+- Do NOT place two faces or two images next to each other.
+- The output is a single portrait photo with only the eyebrows changed.
+
 FORBIDDEN — Do NOT change:
 - Face shape, eyes, nose, mouth, lips, teeth
 - Skin color, skin texture, pores, wrinkles, moles, freckles
