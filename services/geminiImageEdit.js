@@ -62,6 +62,18 @@ EYEBROW RULES:
 - The result must be indistinguishable from a real photograph
 - Do NOT paint, draw, or illustrate the eyebrows — they must be photorealistic
 
+GOLDEN RATIO PLACEMENT (critical — adapt the reference shape to THIS face):
+- The reference image only shows the eyebrow STYLE. You must place the eyebrows according to the person's own facial proportions, NOT by copying the spacing or size from the reference.
+- START: Each eyebrow begins directly above the center of the nostril, aligned vertically with the inner corner of the eye.
+- ARCH: The highest point of the arch sits at the intersection of a line from the outer edge of the nostril through the center of the iris. This should be approximately 2/3 from the start and 1/3 from the end of the eyebrow.
+- END: Each eyebrow ends where a line from the outer edge of the nostril passes through the outer corner of the eye.
+- LENGTH RATIO: The distance from arch to start divided by the distance from arch to end should approximate the golden ratio (1.618:1).
+- THICKNESS: Thickest at the start, gradually tapering toward the tail. The tail should never be thicker than the start.
+- SYMMETRY: Both eyebrows must be symmetrical mirrors of each other, matching the person's natural eye spacing.
+- SPACING: The gap between the two eyebrows should be approximately equal to the width of one eye.
+- FOR MALE FACES: Eyebrows sit lower and closer to the eyes, straighter with less arch, and thicker overall.
+- FOR FEMALE FACES: Eyebrows sit slightly higher above the brow bone, with a more defined arch, and more refined/thinner shape.
+
 FORBIDDEN — Do NOT change:
 - Face shape, eyes, nose, mouth, lips, teeth
 - Skin color, skin texture, pores, wrinkles, moles, freckles
