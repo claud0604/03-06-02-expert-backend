@@ -1,9 +1,8 @@
 /**
  * Gemini Image Editing Service
- * Google GenAI SDK — reference image-based eyebrow editing
+ * Google AI API — prompt-based eyebrow editing
  * Supports multiple Gemini image models
  */
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 const sharp = require('sharp');
 
 const API_KEY = process.env.GEMINI_API_KEY;
@@ -12,6 +11,10 @@ const MODELS = {
     'gemini': 'gemini-2.5-flash-image',
     'gemini31': 'gemini-3.1-flash-image-preview'
 };
+
+function getEndpoint(model) {
+    return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${API_KEY}`;
+}
 
 /**
  * Edit eyebrows using Gemini's native image editing with reference image
@@ -26,15 +29,7 @@ async function editEyebrows(imageBuffer, refImageBuffer, engine = 'gemini') {
     }
 
     const modelId = MODELS[engine] || MODELS['gemini'];
-
-    const genAI = new GoogleGenerativeAI(API_KEY);
-    const model = genAI.getGenerativeModel({
-        model: modelId,
-        generationConfig: {
-            responseModalities: ['TEXT', 'IMAGE'],
-            temperature: 0.4
-        }
-    });
+    const endpoint = getEndpoint(modelId);
 
     const jpegBuffer = await sharp(imageBuffer)
         .jpeg({ quality: 95 })
@@ -43,6 +38,9 @@ async function editEyebrows(imageBuffer, refImageBuffer, engine = 'gemini') {
     const refJpegBuffer = await sharp(refImageBuffer)
         .jpeg({ quality: 95 })
         .toBuffer();
+
+    const imageBase64 = jpegBuffer.toString('base64');
+    const refImageBase64 = refJpegBuffer.toString('base64');
 
     const editPrompt = `You are a professional beauty retouching expert.
 
@@ -66,26 +64,51 @@ FORBIDDEN — Do NOT change:
 - Background, lighting, camera angle, image dimensions, composition
 - Expression, gaze direction, head tilt`;
 
-    console.log(`[Gemini] Calling ${modelId} via GenAI SDK...`);
-
-    const result = await model.generateContent([
-        {
-            inlineData: {
-                mimeType: 'image/jpeg',
-                data: jpegBuffer.toString('base64')
+    const requestBody = {
+        contents: [
+            {
+                role: 'user',
+                parts: [
+                    {
+                        inlineData: {
+                            mimeType: 'image/jpeg',
+                            data: imageBase64
+                        }
+                    },
+                    {
+                        inlineData: {
+                            mimeType: 'image/jpeg',
+                            data: refImageBase64
+                        }
+                    },
+                    {
+                        text: editPrompt
+                    }
+                ]
             }
-        },
-        {
-            inlineData: {
-                mimeType: 'image/jpeg',
-                data: refJpegBuffer.toString('base64')
-            }
-        },
-        { text: editPrompt }
-    ]);
+        ],
+        generationConfig: {
+            responseModalities: ['TEXT', 'IMAGE'],
+            temperature: 0.4
+        }
+    };
 
-    const response = result.response;
-    const candidates = response.candidates;
+    console.log(`[Gemini] Calling ${modelId} API...`);
+
+    const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(120000)
+    });
+
+    if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Gemini API error ${response.status}: ${errText}`);
+    }
+
+    const data = await response.json();
+    const candidates = data.candidates;
     if (!candidates || candidates.length === 0) {
         throw new Error('Gemini returned no candidates');
     }
