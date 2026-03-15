@@ -1,9 +1,10 @@
 /**
  * Gemini Image Editing Service
- * Google AI API — prompt-based eyebrow editing
+ * Google GenAI SDK — prompt-based eyebrow editing
  * Supports multiple Gemini image models
  */
 const sharp = require('sharp');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const API_KEY = process.env.GEMINI_API_KEY;
 
@@ -11,10 +12,6 @@ const MODELS = {
     'gemini': 'gemini-2.5-flash-image',
     'gemini31': 'gemini-3.1-flash-image-preview'
 };
-
-function getEndpoint(model) {
-    return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${API_KEY}`;
-}
 
 /**
  * Edit eyebrows using Gemini's native image editing with reference image
@@ -29,7 +26,15 @@ async function editEyebrows(imageBuffer, refImageBuffer, engine = 'gemini') {
     }
 
     const modelId = MODELS[engine] || MODELS['gemini'];
-    const endpoint = getEndpoint(modelId);
+
+    const genAI = new GoogleGenerativeAI(API_KEY);
+    const model = genAI.getGenerativeModel({
+        model: modelId,
+        generationConfig: {
+            responseModalities: ['TEXT', 'IMAGE'],
+            temperature: 0.4
+        }
+    });
 
     const jpegBuffer = await sharp(imageBuffer)
         .jpeg({ quality: 95 })
@@ -64,51 +69,34 @@ FORBIDDEN — Do NOT change:
 - Background, lighting, camera angle, image dimensions, composition
 - Expression, gaze direction, head tilt`;
 
-    const requestBody = {
-        contents: [
-            {
-                role: 'user',
-                parts: [
-                    {
-                        inlineData: {
-                            mimeType: 'image/jpeg',
-                            data: imageBase64
-                        }
-                    },
-                    {
-                        inlineData: {
-                            mimeType: 'image/jpeg',
-                            data: refImageBase64
-                        }
-                    },
-                    {
-                        text: editPrompt
+    console.log(`[Gemini SDK] Calling ${modelId}...`);
+
+    const result = await model.generateContent({
+        contents: [{
+            role: 'user',
+            parts: [
+                {
+                    inlineData: {
+                        mimeType: 'image/jpeg',
+                        data: imageBase64
                     }
-                ]
-            }
-        ],
-        generationConfig: {
-            responseModalities: ['TEXT', 'IMAGE'],
-            temperature: 0.4
-        }
-    };
-
-    console.log(`[Gemini] Calling ${modelId} API...`);
-
-    const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(120000)
+                },
+                {
+                    inlineData: {
+                        mimeType: 'image/jpeg',
+                        data: refImageBase64
+                    }
+                },
+                {
+                    text: editPrompt
+                }
+            ]
+        }]
     });
 
-    if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Gemini API error ${response.status}: ${errText}`);
-    }
+    const response = result.response;
+    const candidates = response.candidates;
 
-    const data = await response.json();
-    const candidates = data.candidates;
     if (!candidates || candidates.length === 0) {
         throw new Error('Gemini returned no candidates');
     }
@@ -132,7 +120,7 @@ FORBIDDEN — Do NOT change:
         throw new Error('Gemini returned no image data');
     }
 
-    console.log(`[Gemini] Got ${results.length} image(s) from ${modelId}`);
+    console.log(`[Gemini SDK] Got ${results.length} image(s) from ${modelId}`);
     return results;
 }
 
