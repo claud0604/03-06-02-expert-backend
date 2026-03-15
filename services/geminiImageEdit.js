@@ -27,17 +27,26 @@ async function editEyebrows(imageBuffer, prompt) {
 
     const imageBase64 = jpegBuffer.toString('base64');
 
-    const editPrompt = `You are a professional beauty retouching expert. Edit ONLY the eyebrows in this photo. Keep everything else EXACTLY the same — same face, same skin, same eyes, same hair, same background, same lighting, same angle. Do NOT change anything except the eyebrows.
+    const editPrompt = `You are a professional beauty retouching expert.
 
-Change the eyebrows to: ${prompt}
+MOST IMPORTANT RULE — IDENTITY PRESERVATION:
+The attached photo is of a REAL person. You MUST preserve this person's face EXACTLY as it is. The face shape, eyes, nose, mouth, skin tone, skin texture, wrinkles, moles, facial hair, head hair, ears — ALL must remain 100% identical to the original photo. The person in the output image must be clearly recognizable as the SAME person. Do NOT generate a different face. Do NOT smooth, beautify, or alter the skin. Do NOT change the lighting, background, angle, or composition. The ONLY change allowed is the eyebrows.
 
-CRITICAL RULES:
-- The result must look like a real photograph, NOT a painting or illustration
-- The eyebrows must have realistic individual hair strands
-- Match the person's natural hair color for the eyebrows
-- Maintain photorealistic quality throughout
-- Do NOT alter any other facial features
-- The output image must have the same dimensions and composition as the input`;
+TASK:
+Change ONLY the eyebrows to: ${prompt}
+
+EYEBROW RULES:
+- The eyebrows must look like real human eyebrows with natural individual hair strands
+- Match the person's natural hair color and skin tone
+- The result must be indistinguishable from a real photograph
+- Do NOT paint, draw, or illustrate the eyebrows — they must be photorealistic
+
+FORBIDDEN — Do NOT change:
+- Face shape, eyes, nose, mouth, lips, teeth
+- Skin color, skin texture, pores, wrinkles, moles, freckles
+- Hair, ears, neck, clothing, jewelry, accessories
+- Background, lighting, camera angle, image dimensions, composition
+- Expression, gaze direction, head tilt`;
 
     const requestBody = {
         contents: [
