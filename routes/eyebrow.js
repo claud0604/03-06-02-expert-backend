@@ -254,4 +254,35 @@ router.get('/list/:customerId', authExpert, async (req, res, next) => {
     }
 });
 
+/**
+ * DELETE /api/eyebrow/delete
+ * Delete a generated eyebrow image from GCS
+ * Body: { gcsKey }
+ */
+router.post('/delete', authExpert, async (req, res, next) => {
+    try {
+        const { gcsKey } = req.body;
+        if (!gcsKey) {
+            return res.status(400).json({ success: false, message: 'gcsKey is required.' });
+        }
+
+        // Delete result image
+        await bucket.file(gcsKey).delete().catch(() => {});
+
+        // Try to delete matching mask
+        const maskKey = gcsKey
+            .replace(/eyebrow_(ig|gm)_/, 'eyebrow_mask_$1_')
+            .replace(/eyebrow_(?!(ig|gm|mask)_)/, 'eyebrow_mask_')
+            .replace(/\.jpg$/, '.png')
+            .replace(/_\d+\.png$/, '.png');
+        await bucket.file(maskKey).delete().catch(() => {});
+
+        console.log(`[Eyebrow] Deleted: ${gcsKey}`);
+        res.json({ success: true });
+    } catch (error) {
+        console.error('[Eyebrow] Delete error:', error.message);
+        next(error);
+    }
+});
+
 module.exports = router;
