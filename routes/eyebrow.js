@@ -4,8 +4,11 @@
  */
 const express = require('express');
 const router = express.Router();
-const { bucket, GCS_CONFIG } = require('../config/gcs');
+const { storage, bucket, GCS_CONFIG } = require('../config/gcs');
 const authExpert = require('../middleware/authExpert');
+
+// Reference eyebrow images bucket
+const refBucket = storage.bucket('02-expert');
 
 // Lazy-loaded services
 let _faceLandmarks = null;
@@ -25,14 +28,17 @@ function getGeminiImageEdit() {
     return _geminiImageEdit;
 }
 
-// Eyebrow style → detailed prompt mapping
-const STYLE_PROMPTS = {
-    round: 'Perfectly groomed round-shaped eyebrows with a soft gentle curved arch. Medium thickness with natural-looking hair strokes. The eyebrow follows a smooth continuous curve from the inner corner to the outer corner. Clean well-defined edges that blend naturally into surrounding skin. Photorealistic high-resolution quality, matching the person\'s natural hair color.',
-    ascending: 'Sharp ascending eyebrows angled upward from the inner corner to the outer corner. The tail is noticeably higher than the head of the eyebrow, creating an upward diagonal line. Clean defined edges with natural hair texture and medium-thick strokes. Well-groomed appearance. Photorealistic quality matching the person\'s natural hair color.',
-    semi_arch: 'Semi-arched eyebrows with a gentle natural arch. The highest point is slightly past the middle of the eyebrow. Balanced even thickness throughout from head to tail. Natural hair strands visible with soft edges blending into skin. Elegant but not dramatic curve. Photorealistic quality matching the person\'s natural hair color.',
-    arch: 'Dramatic high-arched eyebrows with a clearly defined peak at the highest point. Well-sculpted shape with an elegant curve that lifts at the arch and tapers toward the tail. Clean groomed appearance with visible hair texture. The arch creates a lifted sophisticated look. Photorealistic quality matching the person\'s natural hair color.',
-    straight: 'Perfectly straight horizontal eyebrows in Korean beauty style. Flat even shape from inner corner to outer corner with consistent thickness throughout. No arch or curve, completely horizontal line. Natural hair texture with soft edges and clean groomed appearance. Photorealistic quality matching the person\'s natural hair color.'
+// Eyebrow style → GCS reference image filename
+const STYLE_REF_FILES = {
+    round: '00-basic-setting/round.png',
+    ascending: '00-basic-setting/ascending.png',
+    semi_arch: '00-basic-setting/semi_arch.png',
+    arch: '00-basic-setting/arch.png',
+    straight: '00-basic-setting/straight.png'
 };
+
+// Cache for reference images (loaded once)
+const refImageCache = {};
 
 /**
  * POST /api/eyebrow/generate
@@ -50,11 +56,11 @@ router.post('/generate', authExpert, async (req, res, next) => {
             });
         }
 
-        const prompt = STYLE_PROMPTS[eyebrowStyle];
-        if (!prompt) {
+        const refFile = STYLE_REF_FILES[eyebrowStyle];
+        if (!refFile) {
             return res.status(400).json({
                 success: false,
-                message: `Invalid eyebrowStyle. Must be one of: ${Object.keys(STYLE_PROMPTS).join(', ')}`
+                message: `Invalid eyebrowStyle. Must be one of: ${Object.keys(STYLE_REF_FILES).join(', ')}`
             });
         }
 
@@ -89,9 +95,16 @@ router.post('/generate', authExpert, async (req, res, next) => {
         let maskBuffer = null;
 
         if (engine === 'gemini' || engine === 'gemini31') {
-            // === Gemini Engine (prompt-based, no mask) ===
-            console.log(`[Eyebrow] Using Gemini engine (${engine})...`);
-            resultBuffers = await getGeminiImageEdit().editEyebrows(imageBuffer, prompt, engine);
+            // === Gemini Engine (reference image-based) ===
+            // Load reference eyebrow image (cached)
+            if (!refImageCache[eyebrowStyle]) {
+                console.log(`[Eyebrow] Loading reference image: ${refFile}`);
+                const [refBuffer] = await refBucket.file(refFile).download();
+                refImageCache[eyebrowStyle] = refBuffer;
+            }
+            const refImageBuffer = refImageCache[eyebrowStyle];
+            console.log(`[Eyebrow] Using Gemini engine (${engine}) with reference image...`);
+            resultBuffers = await getGeminiImageEdit().editEyebrows(imageBuffer, refImageBuffer, engine);
             console.log(`[Eyebrow] Gemini returned ${resultBuffers.length} result(s)`);
         } else {
             // === Imagen 3 Engine (mask-based, 2-step) ===
@@ -100,7 +113,8 @@ router.post('/generate', authExpert, async (req, res, next) => {
             console.log(`[Eyebrow] Mask created (${(maskBuffer.length / 1024).toFixed(1)}KB)`);
 
             console.log(`[Eyebrow] Using Imagen 3 engine (2-step, 4 candidates)...`);
-            resultBuffers = await getImagenInpainting().inpaintEyebrows(imageBuffer, maskBuffer, prompt);
+            const imagenPrompt = `Natural photorealistic ${eyebrowStyle.replace('_', ' ')} eyebrows matching the person's hair color`;
+            resultBuffers = await getImagenInpainting().inpaintEyebrows(imageBuffer, maskBuffer, imagenPrompt);
             console.log(`[Eyebrow] Imagen returned ${resultBuffers.length} result(s)`);
         }
 

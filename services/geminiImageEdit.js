@@ -17,13 +17,13 @@ function getEndpoint(model) {
 }
 
 /**
- * Edit eyebrows using Gemini's native image editing
+ * Edit eyebrows using Gemini's native image editing with reference image
  * @param {Buffer} imageBuffer - original face image
- * @param {string} prompt - eyebrow style description
+ * @param {Buffer} refImageBuffer - reference eyebrow style image
  * @param {string} engine - 'gemini' or 'gemini31'
  * @returns {Buffer[]} array of generated JPEG buffers
  */
-async function editEyebrows(imageBuffer, prompt, engine = 'gemini') {
+async function editEyebrows(imageBuffer, refImageBuffer, engine = 'gemini') {
     if (!API_KEY) {
         throw new Error('GEMINI_API_KEY is not set in environment variables');
     }
@@ -35,19 +35,25 @@ async function editEyebrows(imageBuffer, prompt, engine = 'gemini') {
         .jpeg({ quality: 95 })
         .toBuffer();
 
+    const refJpegBuffer = await sharp(refImageBuffer)
+        .jpeg({ quality: 95 })
+        .toBuffer();
+
     const imageBase64 = jpegBuffer.toString('base64');
+    const refImageBase64 = refJpegBuffer.toString('base64');
 
     const editPrompt = `You are a professional beauty retouching expert.
 
 MOST IMPORTANT RULE — IDENTITY PRESERVATION:
-The attached photo is of a REAL person. You MUST preserve this person's face EXACTLY as it is. The face shape, eyes, nose, mouth, skin tone, skin texture, wrinkles, moles, facial hair, head hair, ears — ALL must remain 100% identical to the original photo. The person in the output image must be clearly recognizable as the SAME person. Do NOT generate a different face. Do NOT smooth, beautify, or alter the skin. Do NOT change the lighting, background, angle, or composition. The ONLY change allowed is the eyebrows.
+The first image is a photo of a REAL person. You MUST preserve this person's face EXACTLY as it is. The face shape, eyes, nose, mouth, skin tone, skin texture, wrinkles, moles, facial hair, head hair, ears — ALL must remain 100% identical to the original photo. The person in the output image must be clearly recognizable as the SAME person. Do NOT generate a different face. Do NOT smooth, beautify, or alter the skin. Do NOT change the lighting, background, angle, or composition. The ONLY change allowed is the eyebrows.
 
 TASK:
-Change ONLY the eyebrows to: ${prompt}
+The second image shows a reference eyebrow shape/style. Apply EXACTLY that eyebrow shape to the person in the first image. Match the shape, angle, thickness, and arch of the reference eyebrow precisely.
 
 EYEBROW RULES:
+- Copy the exact shape and style from the reference eyebrow image
 - The eyebrows must look like real human eyebrows with natural individual hair strands
-- Match the person's natural hair color and skin tone
+- Match the person's natural hair color and skin tone (NOT the color from the reference)
 - The result must be indistinguishable from a real photograph
 - Do NOT paint, draw, or illustrate the eyebrows — they must be photorealistic
 
@@ -67,6 +73,12 @@ FORBIDDEN — Do NOT change:
                         inlineData: {
                             mimeType: 'image/jpeg',
                             data: imageBase64
+                        }
+                    },
+                    {
+                        inlineData: {
+                            mimeType: 'image/jpeg',
+                            data: refImageBase64
                         }
                     },
                     {
