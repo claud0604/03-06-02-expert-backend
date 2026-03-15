@@ -1,6 +1,7 @@
 /**
- * Imagen 3 Inpainting Service
- * Vertex AI REST API — mask-based eyebrow inpainting + original compositing
+ * Imagen 3 Inpainting Service (Optimized)
+ * Vertex AI REST API — 2-step inpainting (REMOVAL → INSERTION) + compositing
+ * Generates multiple candidates for user selection
  */
 const { GoogleAuth } = require('google-auth-library');
 const sharp = require('sharp');
@@ -10,6 +11,8 @@ const PROJECT_ID = process.env.GCS_PROJECT_ID;
 const LOCATION = 'us-central1';
 const MODEL = 'imagen-3.0-capability-001';
 const ENDPOINT = `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${MODEL}:predict`;
+
+const NEGATIVE_PROMPT = 'cartoon, painting, drawing, artificial, flat color, unnatural, blurry, low quality, digital art, illustration, anime, watercolor, oil painting, sketch, pencil drawing, ms paint, clipart, 2D, unrealistic skin texture, disfigured, deformed';
 
 let authClient = null;
 
@@ -26,22 +29,15 @@ async function getAuthClient() {
 }
 
 /**
- * Call Imagen 3 inpainting API
- * @param {Buffer} imageBuffer - original image (JPEG/PNG)
- * @param {Buffer} maskBuffer - mask PNG (white=inpaint, black=keep)
- * @param {string} prompt - text prompt describing desired eyebrows
- * @returns {Buffer} generated image buffer
+ * Step 1: Remove existing eyebrows (fill with skin)
  */
-async function callImagenInpainting(imageBuffer, maskBuffer, prompt) {
+async function removeEyebrows(imageBase64, maskBase64) {
     const client = await getAuthClient();
-
-    const imageBase64 = imageBuffer.toString('base64');
-    const maskBase64 = maskBuffer.toString('base64');
 
     const requestBody = {
         instances: [
             {
-                prompt: prompt,
+                prompt: '',
                 referenceImages: [
                     {
                         referenceType: 'REFERENCE_TYPE_RAW',
@@ -53,7 +49,8 @@ async function callImagenInpainting(imageBuffer, maskBuffer, prompt) {
                         referenceId: 2,
                         referenceImage: { bytesBase64Encoded: maskBase64 },
                         maskImageConfig: {
-                            maskMode: 'MASK_MODE_USER_PROVIDED'
+                            maskMode: 'MASK_MODE_USER_PROVIDED',
+                            dilation: 0.01
                         }
                     }
                 ]
@@ -61,7 +58,9 @@ async function callImagenInpainting(imageBuffer, maskBuffer, prompt) {
         ],
         parameters: {
             sampleCount: 1,
-            editMode: 'EDIT_MODE_INPAINT_INSERTION'
+            editMode: 'EDIT_MODE_INPAINT_REMOVAL',
+            editConfig: { baseSteps: 75 },
+            personGeneration: 'allow_all'
         }
     };
 
@@ -75,15 +74,70 @@ async function callImagenInpainting(imageBuffer, maskBuffer, prompt) {
 
     const predictions = response.data.predictions;
     if (!predictions || predictions.length === 0) {
-        throw new Error('Imagen API returned no predictions');
+        throw new Error('Imagen REMOVAL returned no predictions');
     }
 
-    const generatedBase64 = predictions[0].bytesBase64Encoded;
-    if (!generatedBase64) {
-        throw new Error('Imagen API returned empty image data');
+    const base64 = predictions[0].bytesBase64Encoded;
+    if (!base64) throw new Error('Imagen REMOVAL returned empty image');
+
+    return base64;
+}
+
+/**
+ * Step 2: Insert new eyebrows onto clean face
+ * Returns multiple candidates
+ */
+async function insertEyebrows(cleanImageBase64, maskBase64, prompt) {
+    const client = await getAuthClient();
+
+    const requestBody = {
+        instances: [
+            {
+                prompt: prompt,
+                referenceImages: [
+                    {
+                        referenceType: 'REFERENCE_TYPE_RAW',
+                        referenceId: 1,
+                        referenceImage: { bytesBase64Encoded: cleanImageBase64 }
+                    },
+                    {
+                        referenceType: 'REFERENCE_TYPE_MASK',
+                        referenceId: 2,
+                        referenceImage: { bytesBase64Encoded: maskBase64 },
+                        maskImageConfig: {
+                            maskMode: 'MASK_MODE_USER_PROVIDED',
+                            dilation: 0.01
+                        }
+                    }
+                ]
+            }
+        ],
+        parameters: {
+            sampleCount: 4,
+            editMode: 'EDIT_MODE_INPAINT_INSERTION',
+            editConfig: { baseSteps: 75 },
+            guidanceScale: 60,
+            negativePrompt: NEGATIVE_PROMPT,
+            personGeneration: 'allow_all'
+        }
+    };
+
+    const response = await client.request({
+        url: ENDPOINT,
+        method: 'POST',
+        data: requestBody,
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 90000
+    });
+
+    const predictions = response.data.predictions;
+    if (!predictions || predictions.length === 0) {
+        throw new Error('Imagen INSERTION returned no predictions');
     }
 
-    return Buffer.from(generatedBase64, 'base64');
+    return predictions
+        .filter(p => p.bytesBase64Encoded)
+        .map(p => Buffer.from(p.bytesBase64Encoded, 'base64'));
 }
 
 /**
@@ -134,11 +188,11 @@ async function compositeWithOriginal(originalBuffer, generatedBuffer, maskBuffer
 }
 
 /**
- * Full pipeline: inpaint eyebrows and composite with original
- * @param {Buffer} imageBuffer - original face image
- * @param {Buffer} maskBuffer - eyebrow mask
- * @param {string} prompt - eyebrow style prompt
- * @returns {Buffer} final image JPEG buffer
+ * Full pipeline: 2-step inpainting + compositing
+ * Step 1: REMOVAL — remove existing eyebrows
+ * Step 2: INSERTION — draw new eyebrows (4 candidates)
+ * Step 3: Composite each candidate with original
+ * @returns {Buffer[]} array of final JPEG buffers (up to 4)
  */
 async function inpaintEyebrows(imageBuffer, maskBuffer, prompt) {
     const jpegBuffer = await sharp(imageBuffer)
@@ -149,11 +203,27 @@ async function inpaintEyebrows(imageBuffer, maskBuffer, prompt) {
         .png()
         .toBuffer();
 
-    const generatedBuffer = await callImagenInpainting(jpegBuffer, pngMask, prompt);
+    const imageBase64 = jpegBuffer.toString('base64');
+    const maskBase64 = pngMask.toString('base64');
 
-    const finalBuffer = await compositeWithOriginal(jpegBuffer, generatedBuffer, pngMask);
+    // Step 1: Remove existing eyebrows
+    console.log('[Imagen] Step 1: Removing existing eyebrows...');
+    const cleanBase64 = await removeEyebrows(imageBase64, maskBase64);
+    console.log('[Imagen] Step 1 complete: eyebrows removed');
 
-    return finalBuffer;
+    // Step 2: Insert new eyebrows (4 candidates)
+    console.log('[Imagen] Step 2: Inserting new eyebrows (4 candidates)...');
+    const candidateBuffers = await insertEyebrows(cleanBase64, maskBase64, prompt);
+    console.log(`[Imagen] Step 2 complete: ${candidateBuffers.length} candidates generated`);
+
+    // Step 3: Composite each candidate with original
+    console.log('[Imagen] Step 3: Compositing with original...');
+    const results = await Promise.all(
+        candidateBuffers.map(buf => compositeWithOriginal(jpegBuffer, buf, pngMask))
+    );
+    console.log(`[Imagen] Pipeline complete: ${results.length} final images`);
+
+    return results;
 }
 
 module.exports = { inpaintEyebrows };

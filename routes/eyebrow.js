@@ -1,15 +1,17 @@
 /**
  * Eyebrow AI Generation Routes
- * POST /api/eyebrow/generate — MediaPipe mask + Imagen 3 inpainting
+ * POST /api/eyebrow/generate — supports 2 engines: Imagen 3 (mask-based) & Gemini (prompt-based)
  */
 const express = require('express');
 const router = express.Router();
 const { bucket, GCS_CONFIG } = require('../config/gcs');
 const authExpert = require('../middleware/authExpert');
 
-// Lazy-loaded to avoid crashing server on startup (TF.js heavy init)
+// Lazy-loaded services
 let _faceLandmarks = null;
 let _imagenInpainting = null;
+let _geminiImageEdit = null;
+
 function getFaceLandmarks() {
     if (!_faceLandmarks) _faceLandmarks = require('../services/faceLandmarks');
     return _faceLandmarks;
@@ -17,6 +19,10 @@ function getFaceLandmarks() {
 function getImagenInpainting() {
     if (!_imagenInpainting) _imagenInpainting = require('../services/imagenInpainting');
     return _imagenInpainting;
+}
+function getGeminiImageEdit() {
+    if (!_geminiImageEdit) _geminiImageEdit = require('../services/geminiImageEdit');
+    return _geminiImageEdit;
 }
 
 // Eyebrow style → detailed prompt mapping
@@ -31,11 +37,11 @@ const STYLE_PROMPTS = {
 /**
  * POST /api/eyebrow/generate
  * Generate AI eyebrow image for a customer
- * Body: { customerId, eyebrowStyle }
+ * Body: { customerId, eyebrowStyle, engine: 'imagen' | 'gemini' }
  */
 router.post('/generate', authExpert, async (req, res, next) => {
     try {
-        const { customerId, eyebrowStyle } = req.body;
+        const { customerId, eyebrowStyle, engine = 'imagen' } = req.body;
 
         if (!customerId || !eyebrowStyle) {
             return res.status(400).json({
@@ -52,7 +58,7 @@ router.post('/generate', authExpert, async (req, res, next) => {
             });
         }
 
-        console.log(`[Eyebrow] Starting generation for customer=${customerId}, style=${eyebrowStyle}`);
+        console.log(`[Eyebrow] Starting generation: customer=${customerId}, style=${eyebrowStyle}, engine=${engine}`);
 
         // 1. Find customer's front face photo in GCS
         const prefix = `${customerId}/face/`;
@@ -76,64 +82,85 @@ router.post('/generate', authExpert, async (req, res, next) => {
         const [imageBuffer] = await frontFile.download();
         console.log(`[Eyebrow] Downloaded face photo (${(imageBuffer.length / 1024).toFixed(1)}KB)`);
 
-        // 3. Detect eyebrow landmarks and create mask
-        console.log('[Eyebrow] Detecting face landmarks...');
-        const maskBuffer = await getFaceLandmarks().detectEyebrowsAndCreateMask(imageBuffer);
-        console.log(`[Eyebrow] Mask created (${(maskBuffer.length / 1024).toFixed(1)}KB)`);
-
-        // 4. Inpaint eyebrows with Imagen 3
-        console.log(`[Eyebrow] Calling Imagen 3 inpainting (style: ${eyebrowStyle})...`);
-        const resultBuffer = await getImagenInpainting().inpaintEyebrows(imageBuffer, maskBuffer, prompt);
-        console.log(`[Eyebrow] Inpainting complete (${(resultBuffer.length / 1024).toFixed(1)}KB)`);
-
-        // 5. Upload result + mask to GCS
         const timestamp = Date.now();
-        const gcsKey = `${customerId}/face/eyebrow_${eyebrowStyle}_${timestamp}.jpg`;
-        const maskGcsKey = `${customerId}/face/eyebrow_mask_${eyebrowStyle}_${timestamp}.png`;
+        const enginePrefix = engine === 'gemini' ? 'gm' : 'ig';
+        let resultBuffers = [];
+        let maskBuffer = null;
 
-        const resultFile = bucket.file(gcsKey);
-        const maskFile = bucket.file(maskGcsKey);
+        if (engine === 'gemini') {
+            // === Gemini Engine (prompt-based, no mask) ===
+            console.log(`[Eyebrow] Using Gemini engine...`);
+            resultBuffers = await getGeminiImageEdit().editEyebrows(imageBuffer, prompt);
+            console.log(`[Eyebrow] Gemini returned ${resultBuffers.length} result(s)`);
+        } else {
+            // === Imagen 3 Engine (mask-based, 2-step) ===
+            console.log('[Eyebrow] Detecting face landmarks...');
+            maskBuffer = await getFaceLandmarks().detectEyebrowsAndCreateMask(imageBuffer);
+            console.log(`[Eyebrow] Mask created (${(maskBuffer.length / 1024).toFixed(1)}KB)`);
 
-        await Promise.all([
-            resultFile.save(resultBuffer, {
-                contentType: 'image/jpeg',
-                metadata: { cacheControl: 'public, max-age=31536000' }
-            }),
-            maskFile.save(maskBuffer, {
+            console.log(`[Eyebrow] Using Imagen 3 engine (2-step, 4 candidates)...`);
+            resultBuffers = await getImagenInpainting().inpaintEyebrows(imageBuffer, maskBuffer, prompt);
+            console.log(`[Eyebrow] Imagen returned ${resultBuffers.length} result(s)`);
+        }
+
+        // 3. Upload all results to GCS
+        const candidates = [];
+
+        // Upload mask once (Imagen only)
+        let maskGcsKey = null;
+        let maskViewUrl = null;
+        if (maskBuffer) {
+            maskGcsKey = `${customerId}/face/eyebrow_mask_${enginePrefix}_${eyebrowStyle}_${timestamp}.png`;
+            const maskFile = bucket.file(maskGcsKey);
+            await maskFile.save(maskBuffer, {
                 contentType: 'image/png',
                 metadata: { cacheControl: 'public, max-age=31536000' }
-            })
-        ]);
-        console.log(`[Eyebrow] Uploaded result: ${gcsKey}, mask: ${maskGcsKey}`);
-
-        // 6. Generate signed URLs for viewing
-        const [[viewUrl], [maskViewUrl]] = await Promise.all([
-            resultFile.getSignedUrl({
+            });
+            const [url] = await maskFile.getSignedUrl({
                 version: 'v4',
                 action: 'read',
                 expires: Date.now() + GCS_CONFIG.viewExpires * 1000
-            }),
-            maskFile.getSignedUrl({
+            });
+            maskViewUrl = url;
+        }
+
+        // Upload each candidate
+        for (let i = 0; i < resultBuffers.length; i++) {
+            const gcsKey = `${customerId}/face/eyebrow_${enginePrefix}_${eyebrowStyle}_${timestamp}_${i}.jpg`;
+            const file = bucket.file(gcsKey);
+
+            await file.save(resultBuffers[i], {
+                contentType: 'image/jpeg',
+                metadata: { cacheControl: 'public, max-age=31536000' }
+            });
+
+            const [viewUrl] = await file.getSignedUrl({
                 version: 'v4',
                 action: 'read',
                 expires: Date.now() + GCS_CONFIG.viewExpires * 1000
-            })
-        ]);
+            });
 
-        console.log(`[Eyebrow] Generation complete for customer=${customerId}`);
+            candidates.push({
+                viewUrl,
+                gcsKey,
+                index: i
+            });
+        }
+
+        console.log(`[Eyebrow] Uploaded ${candidates.length} candidates for customer=${customerId}`);
 
         res.json({
             success: true,
             data: {
-                viewUrl,
-                gcsKey,
+                engine,
+                candidates,
                 maskViewUrl,
                 maskGcsKey
             }
         });
 
     } catch (error) {
-        console.error('[Eyebrow] Generation error:', error.message);
+        console.error(`[Eyebrow] Generation error (${req.body.engine || 'imagen'}):`, error.message);
         next(error);
     }
 });
@@ -158,14 +185,24 @@ router.get('/list/:customerId', authExpert, async (req, res, next) => {
         // Find matching masks and generate signed URLs
         const items = await Promise.all(resultFiles.map(async (file) => {
             const name = file.name;
-            // Extract style from filename: eyebrow_{style}_{timestamp}.jpg
-            const match = name.match(/eyebrow_([a-z_]+)_(\d+)\.jpg$/);
-            const style = match ? match[1] : 'unknown';
-            const timestamp = match ? parseInt(match[2]) : 0;
 
-            // Find matching mask
-            const maskName = name.replace('eyebrow_', 'eyebrow_mask_').replace('.jpg', '.png');
-            const maskFile = files.find(f => f.name === maskName);
+            // New format: eyebrow_{engine}_{style}_{timestamp}_{index}.jpg
+            // Old format: eyebrow_{style}_{timestamp}.jpg
+            let style = 'unknown';
+            let timestamp = 0;
+            let engine = 'imagen';
+
+            const newMatch = name.match(/eyebrow_(ig|gm)_([a-z_]+)_(\d+)_(\d+)\.jpg$/);
+            const oldMatch = name.match(/eyebrow_([a-z_]+)_(\d+)\.jpg$/);
+
+            if (newMatch) {
+                engine = newMatch[1] === 'gm' ? 'gemini' : 'imagen';
+                style = newMatch[2];
+                timestamp = parseInt(newMatch[3]);
+            } else if (oldMatch) {
+                style = oldMatch[1];
+                timestamp = parseInt(oldMatch[2]);
+            }
 
             const [viewUrl] = await file.getSignedUrl({
                 version: 'v4',
@@ -177,8 +214,22 @@ router.get('/list/:customerId', authExpert, async (req, res, next) => {
                 gcsKey: name,
                 viewUrl,
                 style,
-                timestamp
+                timestamp,
+                engine
             };
+
+            // Find matching mask
+            const maskPattern = name
+                .replace(/eyebrow_(ig|gm)_/, 'eyebrow_mask_$1_')
+                .replace(/eyebrow_(?!(ig|gm)_)/, 'eyebrow_mask_')
+                .replace(/_\d+\.jpg$/, '')
+                .replace(/\.jpg$/, '');
+
+            const maskFile = files.find(f =>
+                f.name.includes('_mask_') &&
+                f.name.includes(style) &&
+                f.name.includes(String(timestamp))
+            );
 
             if (maskFile) {
                 const [maskViewUrl] = await maskFile.getSignedUrl({
