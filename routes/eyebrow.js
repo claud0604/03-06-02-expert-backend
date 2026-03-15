@@ -83,14 +83,15 @@ router.post('/generate', authExpert, async (req, res, next) => {
         console.log(`[Eyebrow] Downloaded face photo (${(imageBuffer.length / 1024).toFixed(1)}KB)`);
 
         const timestamp = Date.now();
-        const enginePrefix = engine === 'gemini' ? 'gm' : 'ig';
+        const enginePrefixMap = { gemini: 'gm', gemini31: 'g31', imagen: 'ig' };
+        const enginePrefix = enginePrefixMap[engine] || 'gm';
         let resultBuffers = [];
         let maskBuffer = null;
 
-        if (engine === 'gemini') {
+        if (engine === 'gemini' || engine === 'gemini31') {
             // === Gemini Engine (prompt-based, no mask) ===
-            console.log(`[Eyebrow] Using Gemini engine...`);
-            resultBuffers = await getGeminiImageEdit().editEyebrows(imageBuffer, prompt);
+            console.log(`[Eyebrow] Using Gemini engine (${engine})...`);
+            resultBuffers = await getGeminiImageEdit().editEyebrows(imageBuffer, prompt, engine);
             console.log(`[Eyebrow] Gemini returned ${resultBuffers.length} result(s)`);
         } else {
             // === Imagen 3 Engine (mask-based, 2-step) ===
@@ -192,11 +193,12 @@ router.get('/list/:customerId', authExpert, async (req, res, next) => {
             let timestamp = 0;
             let engine = 'imagen';
 
-            const newMatch = name.match(/eyebrow_(ig|gm)_([a-z_]+)_(\d+)_(\d+)\.jpg$/);
+            const newMatch = name.match(/eyebrow_(ig|gm|g31)_([a-z_]+)_(\d+)_(\d+)\.jpg$/);
             const oldMatch = name.match(/eyebrow_([a-z_]+)_(\d+)\.jpg$/);
 
             if (newMatch) {
-                engine = newMatch[1] === 'gm' ? 'gemini' : 'imagen';
+                const prefixMap = { gm: 'gemini', g31: 'gemini31', ig: 'imagen' };
+                engine = prefixMap[newMatch[1]] || 'gemini';
                 style = newMatch[2];
                 timestamp = parseInt(newMatch[3]);
             } else if (oldMatch) {

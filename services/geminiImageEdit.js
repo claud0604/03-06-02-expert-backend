@@ -1,25 +1,35 @@
 /**
- * Gemini Image Editing Service (Nano Banana)
- * Google AI API — prompt-based eyebrow editing using Gemini 2.5 Flash Image
- * No mask support — relies on Gemini's understanding to edit only eyebrows
+ * Gemini Image Editing Service
+ * Google AI API — prompt-based eyebrow editing
+ * Supports multiple Gemini image models
  */
 const sharp = require('sharp');
 
 const API_KEY = process.env.GEMINI_API_KEY;
-const MODEL = 'gemini-2.5-flash-image';
-const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${API_KEY}`;
+
+const MODELS = {
+    'gemini': 'gemini-2.5-flash-image',
+    'gemini31': 'gemini-3.1-flash-image-preview'
+};
+
+function getEndpoint(model) {
+    return `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${API_KEY}`;
+}
 
 /**
  * Edit eyebrows using Gemini's native image editing
- * Sends original photo + detailed prompt → receives edited photo
  * @param {Buffer} imageBuffer - original face image
  * @param {string} prompt - eyebrow style description
+ * @param {string} engine - 'gemini' or 'gemini31'
  * @returns {Buffer[]} array of generated JPEG buffers
  */
-async function editEyebrows(imageBuffer, prompt) {
+async function editEyebrows(imageBuffer, prompt, engine = 'gemini') {
     if (!API_KEY) {
         throw new Error('GEMINI_API_KEY is not set in environment variables');
     }
+
+    const modelId = MODELS[engine] || MODELS['gemini'];
+    const endpoint = getEndpoint(modelId);
 
     const jpegBuffer = await sharp(imageBuffer)
         .jpeg({ quality: 95 })
@@ -71,9 +81,9 @@ FORBIDDEN — Do NOT change:
         }
     };
 
-    console.log('[Gemini] Calling Gemini 2.5 Flash Image API...');
+    console.log(`[Gemini] Calling ${modelId} API...`);
 
-    const response = await fetch(ENDPOINT, {
+    const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody),
@@ -110,7 +120,7 @@ FORBIDDEN — Do NOT change:
         throw new Error('Gemini returned no image data');
     }
 
-    console.log(`[Gemini] Got ${results.length} image(s)`);
+    console.log(`[Gemini] Got ${results.length} image(s) from ${modelId}`);
     return results;
 }
 
