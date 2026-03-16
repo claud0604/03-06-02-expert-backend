@@ -249,6 +249,71 @@ router.post('/', authExpert, async (req, res, next) => {
                 if (d.avoidColors && d.avoidColors.length) parts.push(`Avoid Colors: ${d.avoidColors.join(', ')}`);
                 if (d.stylingKeywords && d.stylingKeywords.length) parts.push(`Styling Keywords: ${d.stylingKeywords.join(', ')}`);
 
+                // ─── Expert Diagnosis: Color ───
+                const cd = customer.colorDiagnosis || {};
+                if (cd.type) parts.push(`\n[Color Diagnosis]`);
+                if (cd.type) parts.push(`Color Type: ${cd.type}`);
+                if (cd.bestColors && cd.bestColors.length) parts.push(`Best Colors: ${cd.bestColors.join(', ')}`);
+                if (cd.worstColors && cd.worstColors.length) parts.push(`Worst Colors: ${cd.worstColors.join(', ')}`);
+                if (cd.indicators) {
+                    const ind = cd.indicators;
+                    if (ind.temperature) parts.push(`Temperature: ${ind.temperature}`);
+                    if (ind.value) parts.push(`Value: ${ind.value}`);
+                    if (ind.chroma) parts.push(`Chroma: ${ind.chroma}`);
+                    if (ind.clarity) parts.push(`Clarity: ${ind.clarity}`);
+                }
+                if (cd.faceContrastLevel) parts.push(`Face Contrast: ${cd.faceContrastLevel}`);
+                if (cd.fashionContrastLevel) parts.push(`Fashion Contrast: ${cd.fashionContrastLevel}`);
+                if (cd.description) parts.push(`Color Description: ${cd.description}`);
+
+                // ─── Expert Diagnosis: Face ───
+                const fa = customer.faceAnalysis || {};
+                if (fa.type) parts.push(`\n[Face Analysis]`);
+                if (fa.type) parts.push(`Face Type: ${fa.type}`);
+                if (fa.features) {
+                    const ff = fa.features;
+                    if (ff.forehead) parts.push(`Forehead: ${ff.forehead}`);
+                    if (ff.cheekbone) parts.push(`Cheekbone: ${ff.cheekbone}`);
+                    if (ff.jawline) parts.push(`Jawline: ${ff.jawline}`);
+                    if (ff.chin) parts.push(`Chin: ${ff.chin}`);
+                }
+                if (fa.description) parts.push(`Face Description: ${fa.description}`);
+                if (fa.eyebrow && fa.eyebrow.style) parts.push(`Eyebrow Style: ${fa.eyebrow.style}`);
+                if (fa.eyebrow && fa.eyebrow.comment) parts.push(`Eyebrow Comment: ${fa.eyebrow.comment}`);
+
+                // ─── Expert Diagnosis: Body ───
+                const ba = customer.bodyAnalysis || {};
+                if (ba.skeletonType || ba.silhouetteType) parts.push(`\n[Body Analysis]`);
+                if (ba.skeletonType) parts.push(`Skeleton Type: ${ba.skeletonType}`);
+                if (ba.silhouetteType) parts.push(`Silhouette Type: ${ba.silhouetteType}`);
+                if (ba.features) {
+                    const bf = ba.features;
+                    if (bf.shoulder) parts.push(`Shoulder: ${bf.shoulder}`);
+                    if (bf.waist) parts.push(`Waist: ${bf.waist}`);
+                    if (bf.hip) parts.push(`Hip: ${bf.hip}`);
+                    if (bf.leg) parts.push(`Leg: ${bf.leg}`);
+                }
+                if (ba.bestItems && ba.bestItems.length) parts.push(`Best Items: ${ba.bestItems.join(', ')}`);
+                if (ba.worstItems && ba.worstItems.length) parts.push(`Worst Items: ${ba.worstItems.join(', ')}`);
+                if (ba.description) parts.push(`Body Description: ${ba.description}`);
+
+                // ─── Expert Diagnosis: Styling ───
+                const st = customer.styling || {};
+                if (st.keywords && st.keywords.length) parts.push(`\n[Styling]`);
+                if (st.keywords && st.keywords.length) parts.push(`Styling Keywords: ${st.keywords.join(', ')}`);
+                if (st.recommendations) {
+                    const r = st.recommendations;
+                    if (r.tops && r.tops.length) parts.push(`Recommended Tops: ${r.tops.join(', ')}`);
+                    if (r.bottoms && r.bottoms.length) parts.push(`Recommended Bottoms: ${r.bottoms.join(', ')}`);
+                    if (r.outerwear && r.outerwear.length) parts.push(`Recommended Outerwear: ${r.outerwear.join(', ')}`);
+                    if (r.dress && r.dress.length) parts.push(`Recommended Dress: ${r.dress.join(', ')}`);
+                    if (r.accessories && r.accessories.length) parts.push(`Recommended Accessories: ${r.accessories.join(', ')}`);
+                    if (r.bags && r.bags.length) parts.push(`Recommended Bags: ${r.bags.join(', ')}`);
+                    if (r.shoes && r.shoes.length) parts.push(`Recommended Shoes: ${r.shoes.join(', ')}`);
+                }
+                if (st.avoidItems && st.avoidItems.length) parts.push(`Avoid Items: ${st.avoidItems.join(', ')}`);
+                if (st.description) parts.push(`Styling Description: ${st.description}`);
+
                 customerContext = `\n\n--- CURRENT CUSTOMER DATA ---\n${parts.join('\n')}`;
             }
         }
