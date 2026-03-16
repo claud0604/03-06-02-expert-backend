@@ -1,6 +1,27 @@
 /**
  * AI Expert Data Analysis Agent — with Function Calling
  * POST /api/chat — Gemini-powered agent that can search customer DB
+ *
+ * ── CURRENT FUNCTIONS ──
+ * 1. searchCustomers — DB에서 고객 검색 (퍼스널컬러, 얼굴형, 체형, 성별, 나이, 직업 등)
+ *
+ * ── FUTURE FUNCTIONS (TODO) ──
+ * 데이터가 쌓일수록 에이전트의 분석/추천 정확도가 높아짐
+ *
+ * 2. getCustomerStats — 전체 고객 통계 (타입별 비율, 평균 나이, 성별 분포 등)
+ *    예: "가장 많은 퍼스널컬러 타입이 뭐야?" → 파이차트 데이터 반환
+ *
+ * 3. getPopularProducts — 특정 컬러 타입에 가장 많이 추천된 화장품/액세서리
+ *    예: "여름 라이트에 가장 인기있는 립 컬러는?" → 추천 빈도 집계
+ *
+ * 4. findSimilarCustomers — 현재 고객과 유사한 프로필의 고객 검색
+ *    예: "이 고객이랑 비슷한 사람들은 어떤 진단 받았어?" → 유사도 기반 검색
+ *
+ * 5. getExpertSchedule — 전문가의 오늘/이번주 예약 고객 목록
+ *    예: "오늘 내 담당 고객 알려줘" → appointment 필드 기반 조회
+ *
+ * 6. getColorTrends — 기간별 진단 트렌드 분석
+ *    예: "최근 3개월간 겨울 타입이 늘었어?" → 시계열 데이터
  */
 const express = require('express');
 const router = express.Router();
