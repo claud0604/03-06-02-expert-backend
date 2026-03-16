@@ -1,18 +1,140 @@
 /**
- * AI Beauty Consultant Chat Routes
- * POST /api/chat — Gemini-powered beauty consultation agent
+ * AI Expert Data Analysis Agent — with Function Calling
+ * POST /api/chat — Gemini-powered agent that can search customer DB
  */
 const express = require('express');
 const router = express.Router();
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { GoogleGenerativeAI, FunctionDeclarationSchemaType } = require('@google/generative-ai');
 const authExpert = require('../middleware/authExpert');
 const Customer = require('../models/Customer');
 
 const API_KEY = process.env.GEMINI_API_KEY;
 
+// ─── Function Declarations (Gemini에게 사용 가능한 도구 알려줌) ───
+const tools = [{
+    functionDeclarations: [{
+        name: 'searchCustomers',
+        description: 'Search customer database by personal color type, face shape, body type, name, gender, age range, or occupation. Returns matching customers with their diagnosis summary. Use this when the expert asks about specific customer groups, statistics, or wants to find customers by diagnosis criteria.',
+        parameters: {
+            type: FunctionDeclarationSchemaType.OBJECT,
+            properties: {
+                personalColor: {
+                    type: FunctionDeclarationSchemaType.STRING,
+                    description: 'Personal color season to filter by (e.g., "Spring", "Summer", "Autumn", "Winter", or sub-types like "Summer Light", "Winter Dark")'
+                },
+                faceShape: {
+                    type: FunctionDeclarationSchemaType.STRING,
+                    description: 'Face shape to filter by (e.g., "Oval", "Round", "Square", "Heart", "Oblong")'
+                },
+                bodyType: {
+                    type: FunctionDeclarationSchemaType.STRING,
+                    description: 'Body type to filter by (e.g., "Straight", "Wave", "Natural")'
+                },
+                gender: {
+                    type: FunctionDeclarationSchemaType.STRING,
+                    description: 'Gender filter: "male" or "female"'
+                },
+                name: {
+                    type: FunctionDeclarationSchemaType.STRING,
+                    description: 'Customer name to search (partial match supported)'
+                },
+                occupation: {
+                    type: FunctionDeclarationSchemaType.STRING,
+                    description: 'Occupation keyword to search'
+                },
+                ageMin: {
+                    type: FunctionDeclarationSchemaType.NUMBER,
+                    description: 'Minimum age filter'
+                },
+                ageMax: {
+                    type: FunctionDeclarationSchemaType.NUMBER,
+                    description: 'Maximum age filter'
+                },
+                limit: {
+                    type: FunctionDeclarationSchemaType.NUMBER,
+                    description: 'Max number of results to return (default: 10, max: 20)'
+                }
+            }
+        }
+    }]
+}];
+
+// ─── Function 실행 (서버에서 안전하게 DB 조회) ───
+async function executeSearchCustomers(params) {
+    const query = {};
+
+    if (params.personalColor) {
+        query['aiDiagnosis.personalColor'] = { $regex: params.personalColor, $options: 'i' };
+    }
+    if (params.faceShape) {
+        query['aiDiagnosis.faceShape'] = { $regex: params.faceShape, $options: 'i' };
+    }
+    if (params.bodyType) {
+        query['aiDiagnosis.bodyType'] = { $regex: params.bodyType, $options: 'i' };
+    }
+    if (params.gender) {
+        query['customerInfo.gender'] = params.gender;
+    }
+    if (params.name) {
+        query['customerInfo.name'] = { $regex: params.name, $options: 'i' };
+    }
+    if (params.occupation) {
+        query['customerInfo.occupation'] = { $regex: params.occupation, $options: 'i' };
+    }
+    if (params.ageMin || params.ageMax) {
+        query['customerInfo.age'] = {};
+        if (params.ageMin) query['customerInfo.age'].$gte = params.ageMin;
+        if (params.ageMax) query['customerInfo.age'].$lte = params.ageMax;
+    }
+
+    const limit = Math.min(params.limit || 10, 20);
+
+    // 민감 정보 제외: 전화번호, 이메일, 사진 URL 제외
+    const customers = await Customer.find(query)
+        .select('customerInfo.name customerInfo.gender customerInfo.age customerInfo.occupation customerInfo.height customerInfo.weight customerInfo.stylePreference customerInfo.diagnosisReason aiDiagnosis meta.status createdAt')
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .lean();
+
+    const total = await Customer.countDocuments(query);
+
+    const results = customers.map(c => {
+        const info = c.customerInfo || {};
+        const d = c.aiDiagnosis || {};
+        return {
+            name: info.name || 'Unknown',
+            gender: info.gender || '',
+            age: info.age || '',
+            occupation: info.occupation || '',
+            personalColor: d.personalColor || '',
+            personalColorDetail: d.personalColorDetail || '',
+            faceShape: d.faceShape || '',
+            bodyType: d.bodyType || '',
+            stylingKeywords: (d.stylingKeywords || []).join(', '),
+            status: (c.meta || {}).status || '',
+            date: c.createdAt ? new Date(c.createdAt).toLocaleDateString('ko-KR') : ''
+        };
+    });
+
+    return JSON.stringify({
+        totalMatched: total,
+        showing: results.length,
+        customers: results
+    });
+}
+
+// ─── System Prompt ───
 const SYSTEM_PROMPT = `You are an advanced data analysis agent for APL COLOR, a professional personal color and image consulting service with 12,000+ real consultation records.
 
 You assist professional colorists and beauty experts by analyzing customer diagnosis data and finding insights.
+
+TOOLS AVAILABLE:
+You have access to the searchCustomers function to query the customer database. Use it when the expert asks about:
+- Finding customers by color type, face shape, body type, etc.
+- Statistics or patterns across multiple customers
+- Comparing a current customer against similar profiles
+- Looking up specific customers by name
+Always use the tool rather than guessing — the database has real data.
 
 Your capabilities:
 - Analyze a customer's personal color data (season, sub-tone, hue, value, chroma, contrast) and identify unusual or noteworthy patterns
@@ -21,14 +143,15 @@ Your capabilities:
 - Cross-reference personal color with body type for holistic styling insights
 - Spot contradictions or edge cases in diagnosis results
 - Use customer profile info (occupation, age, gender, style preference, diagnosis reason) to suggest practical styling direction tailored to their lifestyle
+- Search and analyze the customer database to find patterns and similar cases
 
 LIFESTYLE & PROFILE-BASED ANALYSIS:
 When customer profile data is available, incorporate it into your analysis:
 - **Occupation**: Suggest styling atmosphere that fits their work environment (e.g., corporate = polished/authoritative, creative = expressive/unique, service = approachable/trustworthy, student = fresh/trendy)
-- **Age**: Consider age-appropriate styling — not stereotyping, but practical guidance (e.g., a 25-year-old may want trendier looks, a 45-year-old executive may prioritize sophistication)
-- **Gender**: Factor in gender-specific styling norms and opportunities (makeup intensity, hair styling range, accessory choices)
-- **Style Preference**: If the customer stated a preference, check if their color/body diagnosis aligns or conflicts with it — flag mismatches as discussion points
-- **Diagnosis Reason**: Understanding WHY they came (job interview prep, wedding, self-improvement, career change) helps prioritize recommendations
+- **Age**: Consider age-appropriate styling — not stereotyping, but practical guidance
+- **Gender**: Factor in gender-specific styling norms and opportunities
+- **Style Preference**: Check if their color/body diagnosis aligns or conflicts with it
+- **Diagnosis Reason**: Understanding WHY they came helps prioritize recommendations
 - **Body Measurements**: Height, weight, clothing size context for practical fashion advice
 
 When the expert asks you to analyze a customer:
@@ -105,14 +228,15 @@ router.post('/', authExpert, async (req, res, next) => {
                 if (d.avoidColors && d.avoidColors.length) parts.push(`Avoid Colors: ${d.avoidColors.join(', ')}`);
                 if (d.stylingKeywords && d.stylingKeywords.length) parts.push(`Styling Keywords: ${d.stylingKeywords.join(', ')}`);
 
-                customerContext = `\n\n--- CUSTOMER DATA ---\n${parts.join('\n')}`;
+                customerContext = `\n\n--- CURRENT CUSTOMER DATA ---\n${parts.join('\n')}`;
             }
         }
 
         const genAI = new GoogleGenerativeAI(API_KEY);
         const model = genAI.getGenerativeModel({
             model: 'gemini-2.5-flash',
-            systemInstruction: SYSTEM_PROMPT + customerContext
+            systemInstruction: SYSTEM_PROMPT + customerContext,
+            tools: tools
         });
 
         // Build chat history
@@ -122,10 +246,36 @@ router.post('/', authExpert, async (req, res, next) => {
         }));
 
         const chat = model.startChat({ history: chatHistory });
-        const result = await chat.sendMessage(message);
-        const reply = result.response.text();
+        let result = await chat.sendMessage(message);
+        let response = result.response;
 
-        console.log(`[Chat] customer=${customerId || 'none'}, msg="${message.substring(0, 50)}...", reply=${reply.length}chars`);
+        // Function Calling 루프 (AI가 함수 호출을 요청하면 실행 후 결과 전달)
+        let loopCount = 0;
+        while (response.functionCalls() && response.functionCalls().length > 0 && loopCount < 3) {
+            const functionCall = response.functionCalls()[0];
+            console.log(`[Chat] Function call: ${functionCall.name}(${JSON.stringify(functionCall.args)})`);
+
+            let functionResult;
+            if (functionCall.name === 'searchCustomers') {
+                functionResult = await executeSearchCustomers(functionCall.args || {});
+            } else {
+                functionResult = JSON.stringify({ error: 'Unknown function' });
+            }
+
+            // 함수 결과를 Gemini에게 전달
+            result = await chat.sendMessage([{
+                functionResponse: {
+                    name: functionCall.name,
+                    response: { result: functionResult }
+                }
+            }]);
+            response = result.response;
+            loopCount++;
+        }
+
+        const reply = response.text();
+
+        console.log(`[Chat] customer=${customerId || 'none'}, msg="${message.substring(0, 50)}...", reply=${reply.length}chars, fnCalls=${loopCount}`);
 
         res.json({
             success: true,
