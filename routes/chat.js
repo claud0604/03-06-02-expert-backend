@@ -25,7 +25,7 @@
  */
 const express = require('express');
 const router = express.Router();
-const { GoogleGenerativeAI, FunctionDeclarationSchemaType } = require('@google/generative-ai');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 const authExpert = require('../middleware/authExpert');
 const Customer = require('../models/Customer');
 
@@ -37,42 +37,42 @@ const tools = [{
         name: 'searchCustomers',
         description: 'Search customer database by personal color type, face shape, body type, name, gender, age range, or occupation. Returns matching customers with their diagnosis summary. Use this when the expert asks about specific customer groups, statistics, or wants to find customers by diagnosis criteria.',
         parameters: {
-            type: FunctionDeclarationSchemaType.OBJECT,
+            type: 'OBJECT',
             properties: {
                 personalColor: {
-                    type: FunctionDeclarationSchemaType.STRING,
+                    type: 'STRING',
                     description: 'Personal color season to filter by (e.g., "Spring", "Summer", "Autumn", "Winter", or sub-types like "Summer Light", "Winter Dark")'
                 },
                 faceShape: {
-                    type: FunctionDeclarationSchemaType.STRING,
+                    type: 'STRING',
                     description: 'Face shape to filter by (e.g., "Oval", "Round", "Square", "Heart", "Oblong")'
                 },
                 bodyType: {
-                    type: FunctionDeclarationSchemaType.STRING,
+                    type: 'STRING',
                     description: 'Body type to filter by (e.g., "Straight", "Wave", "Natural")'
                 },
                 gender: {
-                    type: FunctionDeclarationSchemaType.STRING,
+                    type: 'STRING',
                     description: 'Gender filter: "male" or "female"'
                 },
                 name: {
-                    type: FunctionDeclarationSchemaType.STRING,
+                    type: 'STRING',
                     description: 'Customer name to search (partial match supported)'
                 },
                 occupation: {
-                    type: FunctionDeclarationSchemaType.STRING,
+                    type: 'STRING',
                     description: 'Occupation keyword to search'
                 },
                 ageMin: {
-                    type: FunctionDeclarationSchemaType.NUMBER,
+                    type: 'NUMBER',
                     description: 'Minimum age filter'
                 },
                 ageMax: {
-                    type: FunctionDeclarationSchemaType.NUMBER,
+                    type: 'NUMBER',
                     description: 'Maximum age filter'
                 },
                 limit: {
-                    type: FunctionDeclarationSchemaType.NUMBER,
+                    type: 'NUMBER',
                     description: 'Max number of results to return (default: 10, max: 20)'
                 }
             }
