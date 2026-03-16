@@ -35,7 +35,7 @@ const API_KEY = process.env.GEMINI_API_KEY;
 const tools = [{
     functionDeclarations: [{
         name: 'searchCustomers',
-        description: 'Search customer database by personal color type, face shape, body type, name, gender, age range, or occupation. Returns matching customers with their diagnosis summary. Use this when the expert asks about specific customer groups, statistics, or wants to find customers by diagnosis criteria.',
+        description: 'Search customer database by personal color type, face shape, body type, name, gender, age range, or occupation. Returns matching customers with their diagnosis summary. Use this when the expert asks about specific customer groups or wants to find customers by diagnosis criteria.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -74,6 +74,70 @@ const tools = [{
                 limit: {
                     type: 'NUMBER',
                     description: 'Max number of results to return (default: 10, max: 20)'
+                }
+            }
+        }
+    }, {
+        name: 'getCustomerStats',
+        description: 'Get overall statistics across all customers: personal color type distribution, gender ratio, age distribution, face shape distribution, body type distribution. Use this when the expert asks about trends, proportions, or wants to compare a customer against the overall population. Also useful for questions like "what is the most common color type?" or "average age of Winter type customers?".',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                groupBy: {
+                    type: 'STRING',
+                    description: 'Field to group statistics by: "personalColor", "faceShape", "bodyType", "gender", or "age". Default: "personalColor"'
+                },
+                filterPersonalColor: {
+                    type: 'STRING',
+                    description: 'Optional: filter stats to only this color type (e.g., "Summer Light")'
+                },
+                filterGender: {
+                    type: 'STRING',
+                    description: 'Optional: filter stats by gender ("male" or "female")'
+                }
+            }
+        }
+    }, {
+        name: 'findSimilarCustomers',
+        description: 'Find customers with similar diagnosis profiles to a given customer. Matches by personal color type, face shape, and body type. Use this when the expert asks "who is similar to this customer?", "what did similar customers get recommended?", or wants to compare diagnosis patterns across similar profiles.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                personalColor: {
+                    type: 'STRING',
+                    description: 'Personal color type to match (e.g., "Summer Light")'
+                },
+                faceShape: {
+                    type: 'STRING',
+                    description: 'Face shape to match (e.g., "Oval")'
+                },
+                bodyType: {
+                    type: 'STRING',
+                    description: 'Body type to match (e.g., "Wave")'
+                },
+                excludeCustomerId: {
+                    type: 'STRING',
+                    description: 'Customer ID to exclude from results (the current customer)'
+                },
+                limit: {
+                    type: 'NUMBER',
+                    description: 'Max results to return (default: 5, max: 10)'
+                }
+            }
+        }
+    }, {
+        name: 'getColorTrends',
+        description: 'Analyze diagnosis trends over time periods. Shows how many customers were diagnosed with each personal color type per month. Use this when the expert asks about trends, seasonal patterns, or whether certain types are increasing or decreasing over time.',
+        parameters: {
+            type: 'OBJECT',
+            properties: {
+                months: {
+                    type: 'NUMBER',
+                    description: 'Number of recent months to analyze (default: 6, max: 12)'
+                },
+                personalColor: {
+                    type: 'STRING',
+                    description: 'Optional: focus on a specific color type to see its trend'
                 }
             }
         }
@@ -144,18 +208,212 @@ async function executeSearchCustomers(params) {
     });
 }
 
+// ─── getCustomerStats 실행 ───
+async function executeGetCustomerStats(params) {
+    const groupBy = params.groupBy || 'personalColor';
+
+    const matchStage = {};
+    if (params.filterPersonalColor) {
+        matchStage['aiDiagnosis.personalColor'] = { $regex: params.filterPersonalColor, $options: 'i' };
+    }
+    if (params.filterGender) {
+        matchStage['customerInfo.gender'] = params.filterGender;
+    }
+
+    const fieldMap = {
+        personalColor: '$aiDiagnosis.personalColor',
+        faceShape: '$aiDiagnosis.faceShape',
+        bodyType: '$aiDiagnosis.bodyType',
+        gender: '$customerInfo.gender',
+        age: '$customerInfo.age'
+    };
+
+    const groupField = fieldMap[groupBy] || fieldMap.personalColor;
+
+    const pipeline = [];
+    if (Object.keys(matchStage).length) pipeline.push({ $match: matchStage });
+
+    if (groupBy === 'age') {
+        // Age: 10대, 20대, 30대... 그룹
+        pipeline.push({
+            $bucket: {
+                groupBy: '$customerInfo.age',
+                boundaries: [0, 10, 20, 30, 40, 50, 60, 70, 100],
+                default: 'unknown',
+                output: { count: { $sum: 1 } }
+            }
+        });
+    } else {
+        pipeline.push(
+            { $group: { _id: groupField, count: { $sum: 1 } } },
+            { $sort: { count: -1 } },
+            { $limit: 20 }
+        );
+    }
+
+    const stats = await Customer.aggregate(pipeline);
+    const totalCustomers = await Customer.countDocuments(matchStage);
+
+    // 평균 나이 계산
+    const ageStats = await Customer.aggregate([
+        ...(Object.keys(matchStage).length ? [{ $match: matchStage }] : []),
+        { $group: { _id: null, avgAge: { $avg: '$customerInfo.age' }, minAge: { $min: '$customerInfo.age' }, maxAge: { $max: '$customerInfo.age' } } }
+    ]);
+
+    return JSON.stringify({
+        totalCustomers,
+        groupBy,
+        distribution: stats.map(s => ({ type: s._id || 'N/A', count: s.count })),
+        ageInfo: ageStats[0] ? { average: Math.round(ageStats[0].avgAge), min: ageStats[0].minAge, max: ageStats[0].maxAge } : null
+    });
+}
+
+// ─── findSimilarCustomers 실행 ───
+async function executeFindSimilarCustomers(params) {
+    const query = {};
+    const matchConditions = [];
+
+    if (params.personalColor) {
+        matchConditions.push({ 'aiDiagnosis.personalColor': { $regex: params.personalColor, $options: 'i' } });
+    }
+    if (params.faceShape) {
+        matchConditions.push({ 'aiDiagnosis.faceShape': { $regex: params.faceShape, $options: 'i' } });
+    }
+    if (params.bodyType) {
+        matchConditions.push({ 'aiDiagnosis.bodyType': { $regex: params.bodyType, $options: 'i' } });
+    }
+    if (params.excludeCustomerId) {
+        query['customerId'] = { $ne: params.excludeCustomerId };
+    }
+
+    // 최소 1개 조건 매치
+    if (matchConditions.length) {
+        query['$or'] = matchConditions;
+    }
+
+    const limit = Math.min(params.limit || 5, 10);
+
+    const customers = await Customer.find(query)
+        .select('customerInfo.name customerInfo.gender customerInfo.age customerInfo.occupation aiDiagnosis.personalColor aiDiagnosis.faceShape aiDiagnosis.bodyType aiDiagnosis.stylingKeywords colorDiagnosis.type colorDiagnosis.bestColors bodyAnalysis.skeletonType styling.keywords createdAt')
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .lean();
+
+    const total = await Customer.countDocuments(query);
+
+    const results = customers.map(c => {
+        const info = c.customerInfo || {};
+        const d = c.aiDiagnosis || {};
+        const cd = c.colorDiagnosis || {};
+        const ba = c.bodyAnalysis || {};
+        const st = c.styling || {};
+        // 유사도 점수 계산
+        let similarity = 0;
+        if (params.personalColor && (d.personalColor || '').toLowerCase().includes(params.personalColor.toLowerCase())) similarity++;
+        if (params.faceShape && (d.faceShape || '').toLowerCase().includes(params.faceShape.toLowerCase())) similarity++;
+        if (params.bodyType && (d.bodyType || '').toLowerCase().includes(params.bodyType.toLowerCase())) similarity++;
+
+        return {
+            name: info.name || 'Unknown',
+            gender: info.gender || '',
+            age: info.age || '',
+            occupation: info.occupation || '',
+            personalColor: d.personalColor || '',
+            faceShape: d.faceShape || '',
+            bodyType: d.bodyType || '',
+            colorType: cd.type || '',
+            bestColors: (cd.bestColors || []).join(', '),
+            skeletonType: ba.skeletonType || '',
+            stylingKeywords: (st.keywords || d.stylingKeywords || []).join(', '),
+            similarityScore: similarity + '/' + matchConditions.length
+        };
+    });
+
+    // 유사도 높은 순 정렬
+    results.sort((a, b) => {
+        const scoreA = parseInt(a.similarityScore);
+        const scoreB = parseInt(b.similarityScore);
+        return scoreB - scoreA;
+    });
+
+    return JSON.stringify({
+        totalSimilar: total,
+        showing: results.length,
+        matchCriteria: { personalColor: params.personalColor, faceShape: params.faceShape, bodyType: params.bodyType },
+        customers: results
+    });
+}
+
+// ─── getColorTrends 실행 ───
+async function executeGetColorTrends(params) {
+    const months = Math.min(params.months || 6, 12);
+    const startDate = new Date();
+    startDate.setMonth(startDate.getMonth() - months);
+
+    const matchStage = { createdAt: { $gte: startDate } };
+    if (params.personalColor) {
+        matchStage['aiDiagnosis.personalColor'] = { $regex: params.personalColor, $options: 'i' };
+    }
+
+    const trends = await Customer.aggregate([
+        { $match: matchStage },
+        {
+            $group: {
+                _id: {
+                    year: { $year: '$createdAt' },
+                    month: { $month: '$createdAt' },
+                    color: '$aiDiagnosis.personalColor'
+                },
+                count: { $sum: 1 }
+            }
+        },
+        { $sort: { '_id.year': 1, '_id.month': 1 } }
+    ]);
+
+    // 월별 총계
+    const monthlyTotals = await Customer.aggregate([
+        { $match: { createdAt: { $gte: startDate } } },
+        {
+            $group: {
+                _id: { year: { $year: '$createdAt' }, month: { $month: '$createdAt' } },
+                count: { $sum: 1 }
+            }
+        },
+        { $sort: { '_id.year': 1, '_id.month': 1 } }
+    ]);
+
+    return JSON.stringify({
+        period: `Last ${months} months`,
+        monthlyTotals: monthlyTotals.map(m => ({
+            month: `${m._id.year}-${String(m._id.month).padStart(2, '0')}`,
+            total: m.count
+        })),
+        colorTrends: trends.map(t => ({
+            month: `${t._id.year}-${String(t._id.month).padStart(2, '0')}`,
+            colorType: t._id.color || 'N/A',
+            count: t.count
+        }))
+    });
+}
+
 // ─── System Prompt ───
 const SYSTEM_PROMPT = `You are an advanced data analysis agent for APL COLOR, a professional personal color and image consulting service with 12,000+ real consultation records.
 
 You assist professional colorists and beauty experts by analyzing customer diagnosis data and finding insights.
 
 TOOLS AVAILABLE:
-You have access to the searchCustomers function to query the customer database. Use it when the expert asks about:
-- Finding customers by color type, face shape, body type, etc.
-- Statistics or patterns across multiple customers
-- Comparing a current customer against similar profiles
-- Looking up specific customers by name
-Always use the tool rather than guessing — the database has real data.
+You have access to 4 functions. Use them proactively — chain multiple tools when needed for deeper analysis:
+
+1. **searchCustomers** — Search customers by color type, face shape, body type, name, gender, age, occupation
+2. **getCustomerStats** — Get statistics: type distribution, gender ratio, age averages. Use to compare a customer against the population.
+3. **findSimilarCustomers** — Find customers with similar profiles (same color type, face shape, body type). Use to see what similar customers were recommended.
+4. **getColorTrends** — Analyze diagnosis trends over months. Use to spot increasing/decreasing patterns.
+
+AGENTIC BEHAVIOR:
+- When analyzing a customer, proactively use findSimilarCustomers to compare against similar profiles
+- When asked about patterns, chain getCustomerStats → getColorTrends for comprehensive insights
+- When the data from one tool raises a question, call another tool to investigate further
+- Always use tools rather than guessing — the database has 12,000+ real records
 
 Your capabilities:
 - Analyze a customer's personal color data (season, sub-tone, hue, value, chroma, contrast) and identify unusual or noteworthy patterns
@@ -337,13 +595,19 @@ router.post('/', authExpert, async (req, res, next) => {
 
         // Function Calling 루프 (AI가 함수 호출을 요청하면 실행 후 결과 전달)
         let loopCount = 0;
-        while (response.functionCalls() && response.functionCalls().length > 0 && loopCount < 3) {
+        while (response.functionCalls() && response.functionCalls().length > 0 && loopCount < 5) {
             const functionCall = response.functionCalls()[0];
             console.log(`[Chat] Function call: ${functionCall.name}(${JSON.stringify(functionCall.args)})`);
 
             let functionResult;
             if (functionCall.name === 'searchCustomers') {
                 functionResult = await executeSearchCustomers(functionCall.args || {});
+            } else if (functionCall.name === 'getCustomerStats') {
+                functionResult = await executeGetCustomerStats(functionCall.args || {});
+            } else if (functionCall.name === 'findSimilarCustomers') {
+                functionResult = await executeFindSimilarCustomers(functionCall.args || {});
+            } else if (functionCall.name === 'getColorTrends') {
+                functionResult = await executeGetColorTrends(functionCall.args || {});
             } else {
                 functionResult = JSON.stringify({ error: 'Unknown function' });
             }
