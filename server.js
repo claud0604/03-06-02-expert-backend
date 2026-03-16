@@ -17,6 +17,7 @@ const customersRouter = require('./routes/customers');
 const uploadRouter = require('./routes/upload');
 const appSettingsRouter = require('./routes/appSettings');
 const eyebrowRouter = require('./routes/eyebrow');
+const chatRouter = require('./routes/chat');
 
 const app = express();
 const PORT = process.env.PORT || 3062;
@@ -85,6 +86,7 @@ app.use('/api/customers', customersRouter);
 app.use('/api/upload', uploadRouter);
 app.use('/api/app-settings', appSettingsRouter);
 app.use('/api/eyebrow', eyebrowRouter);
+app.use('/api/chat', chatRouter);
 
 // 404 handler
 app.use((req, res) => {
