@@ -20,6 +20,16 @@ Your capabilities:
 - Identify face shape and feature combinations that require special styling approaches
 - Cross-reference personal color with body type for holistic styling insights
 - Spot contradictions or edge cases in diagnosis results
+- Use customer profile info (occupation, age, gender, style preference, diagnosis reason) to suggest practical styling direction tailored to their lifestyle
+
+LIFESTYLE & PROFILE-BASED ANALYSIS:
+When customer profile data is available, incorporate it into your analysis:
+- **Occupation**: Suggest styling atmosphere that fits their work environment (e.g., corporate = polished/authoritative, creative = expressive/unique, service = approachable/trustworthy, student = fresh/trendy)
+- **Age**: Consider age-appropriate styling — not stereotyping, but practical guidance (e.g., a 25-year-old may want trendier looks, a 45-year-old executive may prioritize sophistication)
+- **Gender**: Factor in gender-specific styling norms and opportunities (makeup intensity, hair styling range, accessory choices)
+- **Style Preference**: If the customer stated a preference, check if their color/body diagnosis aligns or conflicts with it — flag mismatches as discussion points
+- **Diagnosis Reason**: Understanding WHY they came (job interview prep, wedding, self-improvement, career change) helps prioritize recommendations
+- **Body Measurements**: Height, weight, clothing size context for practical fashion advice
 
 When the expert asks you to analyze a customer:
 - Focus on what is UNUSUAL or NOTEWORTHY about this specific customer
@@ -27,6 +37,7 @@ When the expert asks you to analyze a customer:
 - Suggest areas the expert should pay extra attention to
 - Provide data-driven reasoning, not generic advice
 - If the data seems standard/typical, say so honestly
+- When profile info is available, proactively suggest overall styling atmosphere/direction based on their occupation and lifestyle
 
 Rules:
 - You are speaking to a PROFESSIONAL expert, not a customer. Use technical terminology.
@@ -56,9 +67,21 @@ router.post('/', authExpert, async (req, res, next) => {
             const customer = await Customer.findById(customerId).lean();
             if (customer) {
                 const d = customer.aiDiagnosis || {};
+                const info = customer.customerInfo || {};
                 const parts = [];
-                if (customer.name) parts.push(`Name: ${customer.name}`);
-                if (customer.gender) parts.push(`Gender: ${customer.gender}`);
+
+                // Profile info
+                if (info.name) parts.push(`Name: ${info.name}`);
+                if (info.gender) parts.push(`Gender: ${info.gender}`);
+                if (info.age) parts.push(`Age: ${info.age}`);
+                if (info.occupation) parts.push(`Occupation: ${info.occupation}`);
+                if (info.height) parts.push(`Height: ${info.height}cm`);
+                if (info.weight) parts.push(`Weight: ${info.weight}kg`);
+                if (info.clothingSize) parts.push(`Clothing Size: ${info.clothingSize}`);
+                if (info.stylePreference) parts.push(`Style Preference: ${info.stylePreference}`);
+                if (info.diagnosisReason) parts.push(`Diagnosis Reason: ${info.diagnosisReason}`);
+
+                // AI diagnosis data
                 if (d.personalColor) parts.push(`Personal Color: ${d.personalColor}`);
                 if (d.personalColorDetail) parts.push(`Color Detail: ${d.personalColorDetail}`);
                 if (d.personalColorCharacteristics) {
